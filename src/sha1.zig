@@ -10,18 +10,26 @@ pub const SHA1 = struct {
     h3: u32 = 0x10325476,
     h4: u32 = 0xC3D2E1F0,
     ml: usize = 0,
-    chunkProcessBuffer: [64]u8 = undefined,
+    chunkProcessBuffer: [BUFFER_SIZE]u8 = undefined,
     endIndex: usize = 0,
+
+    const CHUNK_NB: usize = 64;
+    const CHUNK_SIZE: usize = 64;
+    const BUFFER_SIZE: usize = CHUNK_NB * CHUNK_SIZE;
 
     pub fn end(self: *SHA1) sha1 {
         const mlAsBytes: [8]u8 = @bitCast(@byteSwap(self.ml));
         self.update(0x80);
 
-        while (self.endIndex != 56) {
+        while ((self.endIndex % CHUNK_SIZE) != 56) {
             self.update(0x00);
         }
         for (mlAsBytes) |c| {
             self.update(c);
+        }
+        var buf = &self.chunkProcessBuffer;
+        for (0..self.endIndex / CHUNK_SIZE) |i| {
+            self.processChunk(buf[i * CHUNK_SIZE .. (i + 1) * CHUNK_SIZE]);
         }
 
         const hh0: sha1 = @as(sha1, self.h0) << 128;
@@ -32,28 +40,47 @@ pub const SHA1 = struct {
         return (hh0 | hh1 | hh2 | hh3 | hh4);
     }
 
-    pub fn update(self: *SHA1, c: u8) void {
+    inline fn update(self: *SHA1, c: u8) void {
         self.chunkProcessBuffer[self.endIndex] = c;
         self.ml += 8;
-        self.endIndex = (self.endIndex + 1) % 64;
+        self.endIndex = (self.endIndex + 1) % (BUFFER_SIZE);
         if (self.endIndex == 0) {
-            self.processChunk();
+            self.processAllChunks();
         }
     }
 
-    pub fn updateSlice(self: *SHA1, s: []const u8) void {
-        for (s) |c| self.update(c);
+    pub fn updateSlice(self: *SHA1, slice: []const u8) void {
+        var diff = (BUFFER_SIZE) - self.endIndex;
+        var buf = &self.chunkProcessBuffer;
+        if (slice.len < diff) {
+            @memcpy(buf[self.endIndex .. self.endIndex + slice.len], slice);
+            self.ml += slice.len * 8;
+            self.endIndex += slice.len;
+            return;
+        }
+        @memcpy(buf[self.endIndex..(BUFFER_SIZE)], slice[0..diff]);
+        self.processAllChunks();
+        self.endIndex = 0;
+        self.ml += diff * 8;
+        if (slice.len > diff) self.updateSlice(slice[diff..]);
     }
 
-    fn processChunk(self: *SHA1) void {
+    inline fn processAllChunks(self: *SHA1) void {
+        var buf = &self.chunkProcessBuffer;
+        for (0..CHUNK_NB) |i| {
+            self.processChunk(buf[i * CHUNK_SIZE .. (i + 1) * CHUNK_SIZE]);
+        }
+    }
+
+    inline fn processChunk(self: *SHA1, chunk: []u8) void {
         var w: [80]u32 = undefined;
         for (0..16) |i| {
             // Reorder for big Endian
             var chunkAsInt = [4]u8{
-                self.chunkProcessBuffer[(i * 4) + 3],
-                self.chunkProcessBuffer[(i * 4) + 2],
-                self.chunkProcessBuffer[(i * 4) + 1],
-                self.chunkProcessBuffer[(i * 4)],
+                chunk[(i * 4) + 3],
+                chunk[(i * 4) + 2],
+                chunk[(i * 4) + 1],
+                chunk[(i * 4)],
             };
             w[i] = @bitCast(chunkAsInt);
         }
