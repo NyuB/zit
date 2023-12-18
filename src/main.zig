@@ -12,7 +12,7 @@ pub fn main() !void {
     for (args[1..]) |name| {
         try stdOut.print("\tRunning {s}\n", .{name});
         try bw.flush();
-        const result = if(std.mem.eql(u8, name, "sha1:big"))hashBenchmarkBig() else hashBenchmarkSmall();
+        const result = if (std.mem.eql(u8, name, "sha1:big")) hashBenchmarkBig() else hashBenchmarkSmall();
         try stdOut.print("\tRan in {d}ms\n", .{@divFloor(result, 1000000)});
         try bw.flush();
     }

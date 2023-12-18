@@ -8,8 +8,5 @@ fmt:
 test:
 	zig build test
 
-run:
-	zig build run
-
-explore:
-	zig test src/explore.zig
+benchmarks:
+	zig build -Doptimize=ReleaseSafe run -- sha1:big sha1:small
