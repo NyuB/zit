@@ -78,6 +78,7 @@ fn Huffman(comptime Symbol: type) type {
 
 const CodeLengthInitError = error{
     MismatchingCounts,
+    IllegalCodeLengthCount,
     AllocationError,
 };
 
@@ -86,6 +87,7 @@ const CodeLengthInfo = struct {
     max_length: usize,
     allocator: std.mem.Allocator,
 
+    /// from RFC-1951 3.2.2 algorithm
     fn init(allocator: std.mem.Allocator, lengths: []const usize) CodeLengthInitError!CodeLengthInfo {
         var max_length: usize = sliceMax(lengths);
 
@@ -95,8 +97,12 @@ const CodeLengthInfo = struct {
         for (length_occurences) |*o| {
             o.* = 0;
         }
+
         for (lengths) |l| {
             length_occurences[l] += 1;
+            if (length_occurences[l] > powerOfTwo(l)) {
+                return CodeLengthInitError.IllegalCodeLengthCount;
+            }
         }
 
         var codes = allocator.alloc(Code, lengths.len) catch return CodeLengthInitError.AllocationError;
@@ -178,6 +184,29 @@ test "fromCodeLengths: RFC-1951 example" {
     try expectSymbol(u8, 'H', huffman, Code{ .value = 0b1111, .bit_length = 4 });
 }
 
+test "fromCodeLengths single symbol" {
+    const symbols = "A";
+    const lengths = &[_]usize{1};
+    var huffman = try Huffman(u8).fromCodeLengths(std.testing.allocator, symbols, lengths);
+    defer huffman.deinit();
+    var cursor = huffman.cursor();
+    try std.testing.expectEqual(@as(?u8, 'A'), cursor.next(false));
+}
+
+test "fromCodeLengths illegal input (too many occurence of a given code length)" {
+    const symbols = "ABC";
+    const lengths = &[_]usize{ 1, 1, 1 };
+    const huffman = Huffman(u8).fromCodeLengths(std.testing.allocator, symbols, lengths);
+    try std.testing.expectError(CodeLengthInitError.IllegalCodeLengthCount, huffman);
+}
+
+test "fromCodeLengths illegal input (symbols and lengths counts differ)" {
+    const symbols = "A";
+    const lengths = &[_]usize{ 1, 1 };
+    const huffman = Huffman(u8).fromCodeLengths(std.testing.allocator, symbols, lengths);
+    try std.testing.expectError(CodeLengthInitError.MismatchingCounts, huffman);
+}
+
 fn expectSymbol(comptime S: type, expected: S, huffman: Huffman(S), code: Code) !void {
     var cursor = huffman.cursor();
     var currentCode = code;
@@ -187,6 +216,7 @@ fn expectSymbol(comptime S: type, expected: S, huffman: Huffman(S), code: Code) 
         try std.testing.expectEqual(@as(?S, null), symbol);
         currentCode = currentCode.skipBit();
     }
+
     var actual = cursor.next(currentCode.firstBitSet());
     try std.testing.expectEqual(expected, actual orelse unreachable);
 }
