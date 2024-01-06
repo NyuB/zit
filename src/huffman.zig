@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("utils.zig");
 
 fn Huffman(comptime Symbol: type) type {
     return struct {
@@ -32,7 +33,7 @@ fn Huffman(comptime Symbol: type) type {
             var info = try CodeLengthInfo.init(allocator, lengths);
             defer info.deinit();
 
-            const treeSize = powerOfTwo(info.max_length + 1) - 1; //2^depth(tree) - 1
+            const treeSize = utils.powerOfTwo(info.max_length + 1) - 1; //2^depth(tree) - 1
             var arr = allocator.alloc(?Symbol, treeSize) catch return CodeLengthInitError.AllocationError;
             for (arr) |*s| {
                 s.* = null;
@@ -100,7 +101,7 @@ const CodeLengthInfo = struct {
 
         for (lengths) |l| {
             length_occurences[l] += 1;
-            if (length_occurences[l] > powerOfTwo(l)) {
+            if (length_occurences[l] > utils.powerOfTwo(l)) {
                 return CodeLengthInitError.IllegalCodeLengthCount;
             }
         }
@@ -141,7 +142,7 @@ const Code = struct {
     bit_length: usize,
 
     fn firstBitSet(self: Code) bool {
-        const oneBitMask = powerOfTwo(self.bit_length - 1);
+        const oneBitMask = utils.powerOfTwo(self.bit_length - 1);
         return self.value & oneBitMask > 0;
     }
 
@@ -149,10 +150,6 @@ const Code = struct {
         return Code{ .value = self.value, .bit_length = self.bit_length - 1 };
     }
 };
-
-inline fn powerOfTwo(n: usize) usize {
-    return std.math.shl(usize, 1, n);
-}
 
 // Tests
 
