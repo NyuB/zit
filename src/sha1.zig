@@ -2,6 +2,7 @@ const std = @import("std");
 const expect = std.testing.expect;
 
 const sha1 = u160;
+const native_endian = @import("builtin").target.cpu.arch.endian();
 
 pub const SHA1 = struct {
     h0: u32 = 0x67452301,
@@ -16,7 +17,7 @@ pub const SHA1 = struct {
     const CHUNK_SIZE: usize = 64;
 
     pub fn end(self: *SHA1) sha1 {
-        const mlAsBytes: [8]u8 = @bitCast(@byteSwap(self.ml));
+        const mlAsBytes: [8]u8 = @bitCast(Endian.bigEndian(self.ml));
         self.update(0x80);
 
         while (self.endIndex != 56) {
@@ -72,13 +73,7 @@ pub const SHA1 = struct {
         for (0..16) |i| {
             // Reorder for big Endian
             const start = (i * 4);
-            const subChunkAsU32 = [4]u8{
-                chunk[start + 3],
-                chunk[start + 2],
-                chunk[start + 1],
-                chunk[start],
-            };
-            w[i] = @bitCast(subChunkAsU32);
+            w[i] = Endian.chunkAsU32(chunk[start .. start + 4]);
         }
         for (16..80) |i| {
             w[i] = leftRotate(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
@@ -128,6 +123,32 @@ pub const SHA1 = struct {
         b.* = a.*;
         a.* = temp;
     }
+
+    const Endian = switch (native_endian) {
+        .Big => struct {
+            inline fn bigEndian(n: usize) usize {
+                return n;
+            }
+            inline fn chunkAsU32(chunk: []const u8) u32 {
+                return @bitCast(chunk[0..4]);
+            }
+        },
+        .Little => struct {
+            inline fn bigEndian(n: usize) usize {
+                return @byteSwap(n);
+            }
+
+            inline fn chunkAsU32(chunk: []const u8) u32 {
+                const reordered = [4]u8{
+                    chunk[3],
+                    chunk[2],
+                    chunk[1],
+                    chunk[0],
+                };
+                return @bitCast(reordered);
+            }
+        },
+    };
 };
 
 inline fn leftRotate(u: u32, n: anytype) u32 {
