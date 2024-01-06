@@ -9,4 +9,4 @@ test:
 	zig build test
 
 benchmarks:
-	zig build -Doptimize=ReleaseSafe run -- sha1:big sha1:small
+	zig build -Doptimize=ReleaseSafe benchmarks -- sha1:big sha1:small
