@@ -1,7 +1,8 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const huffman = @import("huffman.zig");
 
-const DecodeErrors = error{ IllegalFlagCheck, ReservedBlockType };
+const DecodeErrors = error{ IllegalFlagCheck, ReservedBlockType, IllegalLiteralLength };
 
 fn decode(reader: anytype, writer: void) DecodeErrors!void {
     _ = writer;
@@ -21,11 +22,35 @@ fn decode(reader: anytype, writer: void) DecodeErrors!void {
         const blockType: BlockType = @enumFromInt(reader.readBitsRev(2));
         switch (blockType) {
             .Raw => unreachable,
-            .Fixed => {},
+            .Fixed => {
+                switch (readLiteralLength(reader)) {
+                    .Literal => |c| {
+                        _ = c;
+                    },
+                    .Length => |l| {
+                        _ = l;
+                        unreachable;
+                    },
+                    .EndOfBlock => {
+                        unreachable;
+                    },
+                    .Unused => return DecodeErrors.IllegalLiteralLength,
+                }
+            },
             .Dynamic => unreachable,
             .Reserved => return DecodeErrors.ReservedBlockType,
         }
     }
+}
+
+fn readLiteralLength(reader: anytype) LiteralLengthCode {
+    var cursor = FIXED_LITERAL_LENGTH_HUFFMAN.cursor();
+    var s: ?u9 = null;
+    while (s == null) {
+        const b = reader.readBits(1);
+        s = cursor.next(b > 0);
+    }
+    return LITERAL_LENGTH_CODE_TABLE[s orelse unreachable];
 }
 
 const BlockType = enum(u2) {
@@ -83,7 +108,7 @@ const TestReaderWriter = struct {
     output: []u8,
 
     read_index: usize = 0,
-    read_bit_index: u3 = 0,
+    read_bit_index: u4 = 0,
     write_index: usize = 0,
 
     fn readBits(self: *TestReaderWriter, n: usize) usize {
@@ -213,7 +238,7 @@ const LITERAL_LENGTH_CODE_TABLE: [288]LiteralLengthCode = fill: {
 };
 
 const LITERAL_LENGTH_SYMBOLS: [288]u9 = fill: {
-    var symbols: [288]u9 = undefined;
+    comptime var symbols: [288]u9 = undefined;
     for (0..288) |i| {
         const symbol: u9 = @truncate(i);
         symbols[i] = symbol;
@@ -228,7 +253,7 @@ const FIXED_LITERAL_LENGTH_LENGTHS: [288]usize = fill: {
     // 144 - 255     9
     // 256 - 279     7
     // 280 - 287     8
-    var lengths: [288]usize = undefined;
+    comptime var lengths: [288]usize = undefined;
     fillPortion(0, 143, &lengths, 8);
     fillPortion(144, 255, &lengths, 9);
     fillPortion(256, 279, &lengths, 7);
@@ -241,6 +266,13 @@ fn fillPortion(startInclusive: usize, endInclusive: usize, arr: []usize, value: 
         arr[i] = value;
     }
 }
+
+const FIXED_LITERAL_LENGTH_HUFFMAN = blk: {
+    comptime var comptime_fixed_literal_length_huffman_array: [1023]?u9 = undefined;
+    @setEvalBranchQuota(100_000);
+    const res = huffman.Huffman(u9).fromComptimeCodeLengths(&LITERAL_LENGTH_SYMBOLS, &FIXED_LITERAL_LENGTH_LENGTHS, &comptime_fixed_literal_length_huffman_array) catch @compileError("Error initializaing huffman code");
+    break :blk res;
+};
 
 //         Extra           Extra               Extra
 // Code Bits Dist  Code Bits   Dist     Code Bits Distance
@@ -345,4 +377,33 @@ test "Tables consistency" {
 test "Memory layouts" {
     try expect(@sizeOf(LiteralLengthCode) == 4); // max is u16 + enum tag
     try expect(@sizeOf(DistanceCode) == 4); // max is u16 + extra_bits field
+}
+
+test "Fixed Hufffman Literal/Lengths codes" {
+
+    // Lit Value    Bits   Codes
+    // ---------    ----   -----
+    //   0 - 143     8     00110000  through 10111111
+    // 144 - 255     9    110010000  through 111111111
+    // 256 - 279     7      0000000  through 0010111
+    // 280 - 287     8     11000000  through 11000111
+
+    for (0..144) |n| {
+        const code: u9 = @truncate(n);
+        try expectEqual(@as(?u9, code), FIXED_LITERAL_LENGTH_HUFFMAN.getCode(huffman.Code{ .bit_length = 8, .value = 0b0011_0000 + n }));
+    }
+    for (144..256) |n| {
+        const code: u9 = @truncate(n);
+        try expectEqual(@as(?u9, code), FIXED_LITERAL_LENGTH_HUFFMAN.getCode(huffman.Code{ .bit_length = 9, .value = 0b1_1001_0000 + n - 144 }));
+    }
+
+    for (256..280) |n| {
+        const code: u9 = @truncate(n);
+        try expectEqual(@as(?u9, code), FIXED_LITERAL_LENGTH_HUFFMAN.getCode(huffman.Code{ .bit_length = 7, .value = 0b000_0000 + n - 256 }));
+    }
+
+    for (280..288) |n| {
+        const code: u9 = @truncate(n);
+        try expectEqual(@as(?u9, code), FIXED_LITERAL_LENGTH_HUFFMAN.getCode(huffman.Code{ .bit_length = 8, .value = 0b1100_0000 + n - 280 }));
+    }
 }

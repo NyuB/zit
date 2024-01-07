@@ -1,33 +1,37 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 
-fn Huffman(comptime Symbol: type) type {
+pub fn Huffman(comptime Symbol: type) type {
     return struct {
         // null => nodes, non-null => leaves
         arr: []?Symbol,
-        allocator: std.mem.Allocator,
+        allocator: ?std.mem.Allocator,
 
         const H = @This();
 
         pub fn deinit(self: *H) void {
-            self.allocator.free(self.arr);
+            if (self.allocator) |a| {
+                a.free(self.arr);
+            }
         }
 
         pub fn cursor(self: *const H) Cursor {
             return Cursor{ .huffman = self };
         }
 
-        inline fn left(nodeIndex: usize) usize {
-            return nodeIndex * 2 + 1;
+        pub fn getCode(self: H, code: Code) ?Symbol {
+            var current_cursor = self.cursor();
+            var res: ?Symbol = null;
+            var current_code = code;
+            for (0..code.bit_length) |_| {
+                res = current_cursor.next(current_code.firstBitSet());
+                current_code = current_code.skipBit();
+            }
+            return res;
         }
 
-        inline fn right(nodeIndex: usize) usize {
-            return nodeIndex * 2 + 2;
-        }
-
-        /// from RFC-1951 3.2.2 algorithm
         /// `symbols` should be in lexicographic order
-        fn fromCodeLengths(allocator: std.mem.Allocator, symbols: []const Symbol, lengths: []const usize) CodeLengthInitError!H {
+        pub fn fromCodeLengths(allocator: std.mem.Allocator, symbols: []const Symbol, lengths: []const usize) CodeLengthInitError!H {
             if (symbols.len != lengths.len) return CodeLengthInitError.MismatchingCounts;
 
             var info = try CodeLengthInfo.init(allocator, lengths);
@@ -39,22 +43,59 @@ fn Huffman(comptime Symbol: type) type {
                 s.* = null;
             }
 
-            for (symbols, 0..) |s, i| {
-                insert(arr, 0, info.codes[i], s);
-            }
+            _fromCodeLengths(arr, symbols, info);
+
             return .{ .arr = arr, .allocator = allocator };
         }
 
+        /// `symbols` should be in lexicographic order
+        ///
+        /// `backingTreeArray` must have exactly the required size to hold the corresponding huffman tree = 2^max(`lengths`) - 1
+        pub fn fromComptimeCodeLengths(comptime symbols: []const Symbol, comptime lengths: []const usize, comptime backingTreeArray: []?Symbol) CodeLengthInitError!H {
+            if (symbols.len != lengths.len) return CodeLengthInitError.MismatchingCounts;
+
+            comptime var info = try CodeLengthInfo.comptimeInit(lengths);
+            const treeSize = comptime utils.powerOfTwo(info.max_length + 1) - 1; //2^depth(tree) - 1
+            if (treeSize > backingTreeArray.len) {
+                @compileError("Backing array size is insufficient to hold huffman code tree");
+            }
+            if (treeSize < backingTreeArray.len) {
+                @compileError("Backing array is larger than necessary to hold huffman code tree");
+            }
+
+            for (0..backingTreeArray.len) |i| {
+                backingTreeArray[i] = null;
+            }
+            _fromCodeLengths(backingTreeArray, symbols, info);
+
+            return .{ .arr = backingTreeArray, .allocator = null };
+        }
+
+        fn _fromCodeLengths(arr: []?Symbol, symbols: []const Symbol, info: CodeLengthInfo) void {
+            for (symbols, 0..) |s, i| {
+                insert(arr, 0, info.codes[i], s);
+            }
+        }
+
         fn insert(arr: []?Symbol, index: usize, code: Code, symbol: Symbol) void {
-            if (code.bit_length == 0) {
-                arr[index] = symbol;
-                return;
+            var current_code = code;
+            var current_index = index;
+            while (current_code.bit_length != 0) : (current_code = current_code.skipBit()) {
+                if (current_code.firstBitSet()) {
+                    current_index = right(current_index);
+                } else {
+                    current_index = left(current_index);
+                }
             }
-            if (code.firstBitSet()) {
-                insert(arr, right(index), code.skipBit(), symbol);
-            } else {
-                insert(arr, left(index), code.skipBit(), symbol);
-            }
+            arr[current_index] = symbol;
+        }
+
+        inline fn left(nodeIndex: usize) usize {
+            return nodeIndex * 2 + 1;
+        }
+
+        inline fn right(nodeIndex: usize) usize {
+            return nodeIndex * 2 + 2;
         }
 
         pub const Cursor = struct {
@@ -86,7 +127,7 @@ const CodeLengthInitError = error{
 const CodeLengthInfo = struct {
     codes: []const Code,
     max_length: usize,
-    allocator: std.mem.Allocator,
+    allocator: ?std.mem.Allocator,
 
     /// from RFC-1951 3.2.2 algorithm
     fn init(allocator: std.mem.Allocator, lengths: []const usize) CodeLengthInitError!CodeLengthInfo {
@@ -95,37 +136,57 @@ const CodeLengthInfo = struct {
         var length_occurences = allocator.alloc(usize, max_length + 1) catch return CodeLengthInitError.AllocationError;
         defer allocator.free(length_occurences);
 
-        for (length_occurences) |*o| {
-            o.* = 0;
-        }
-
-        for (lengths) |l| {
-            length_occurences[l] += 1;
-            if (length_occurences[l] > utils.powerOfTwo(l)) {
-                return CodeLengthInitError.IllegalCodeLengthCount;
-            }
-        }
-
         var codes = allocator.alloc(Code, lengths.len) catch return CodeLengthInitError.AllocationError;
-        var codeValue: usize = 0;
+        errdefer allocator.free(codes);
+
         var next_code = allocator.alloc(usize, max_length + 1) catch return CodeLengthInitError.AllocationError;
         defer allocator.free(next_code);
 
-        for (1..max_length + 1) |bits| {
-            codeValue = (codeValue + length_occurences[bits - 1]) << 1;
-            next_code[bits] = codeValue;
-        }
-
-        for (lengths, 0..) |l, i| {
-            codes[i] = Code{ .bit_length = l, .value = next_code[l] };
-            next_code[l] += 1;
-        }
+        try _initCodes(length_occurences, next_code, codes, lengths, max_length);
 
         return .{ .max_length = max_length, .allocator = allocator, .codes = codes };
     }
 
+    fn comptimeInit(comptime lengths: []const usize) CodeLengthInitError!CodeLengthInfo {
+        var max_length: usize = comptime sliceMaxComptime(lengths);
+        var length_occurences: [max_length + 1]usize = undefined;
+
+        var codes: [lengths.len]Code = undefined;
+
+        var next_code: [max_length + 1]usize = undefined;
+        try _initCodes(&length_occurences, &next_code, &codes, lengths, max_length);
+        return CodeLengthInfo{ .allocator = null, .max_length = max_length, .codes = &codes };
+    }
+
+    fn _initCodes(length_occurences_buffer: []usize, next_code_buffer: []usize, codes_out: []Code, lengths: []const usize, max_length: usize) CodeLengthInitError!void {
+        for (length_occurences_buffer) |*o| {
+            o.* = 0;
+        }
+
+        for (lengths) |l| {
+            length_occurences_buffer[l] += 1;
+            if (length_occurences_buffer[l] > utils.powerOfTwo(l)) {
+                return CodeLengthInitError.IllegalCodeLengthCount;
+            }
+        }
+
+        var codeValue: usize = 0;
+
+        for (1..max_length + 1) |bits| {
+            codeValue = (codeValue + length_occurences_buffer[bits - 1]) << 1;
+            next_code_buffer[bits] = codeValue;
+        }
+
+        for (lengths, 0..) |l, i| {
+            codes_out[i] = Code{ .bit_length = l, .value = next_code_buffer[l] };
+            next_code_buffer[l] += 1;
+        }
+    }
+
     fn deinit(self: *CodeLengthInfo) void {
-        self.allocator.free(self.codes);
+        if (self.allocator) |a| {
+            a.free(self.codes);
+        }
     }
 
     fn sliceMax(s: []const usize) usize {
@@ -135,9 +196,17 @@ const CodeLengthInfo = struct {
         }
         return res;
     }
+
+    fn sliceMaxComptime(comptime s: []const usize) usize {
+        var res: usize = 0;
+        for (s) |u| {
+            res = @max(u, res);
+        }
+        return res;
+    }
 };
 
-const Code = struct {
+pub const Code = struct {
     value: usize,
     bit_length: usize,
 
@@ -179,6 +248,24 @@ test "fromCodeLengths: RFC-1951 example" {
     try expectSymbol(u8, 'F', huffman, Code{ .value = 0b00, .bit_length = 2 });
     try expectSymbol(u8, 'G', huffman, Code{ .value = 0b1110, .bit_length = 4 });
     try expectSymbol(u8, 'H', huffman, Code{ .value = 0b1111, .bit_length = 4 });
+}
+
+var comptimeBackingArray: [31]?u8 = undefined;
+test "fromComptimeCodeLengths: RFC-1951 example" {
+    const symbols = "ABCDEFGH";
+    const lengths = [_]usize{ 3, 3, 3, 3, 3, 2, 4, 4 };
+
+    var huffman = try Huffman(u8).fromComptimeCodeLengths(symbols, &lengths, &comptimeBackingArray);
+
+    try expectSymbol(u8, 'A', huffman, Code{ .value = 0b010, .bit_length = 3 });
+    try expectSymbol(u8, 'B', huffman, Code{ .value = 0b011, .bit_length = 3 });
+    try expectSymbol(u8, 'C', huffman, Code{ .value = 0b100, .bit_length = 3 });
+    try expectSymbol(u8, 'D', huffman, Code{ .value = 0b101, .bit_length = 3 });
+    try expectSymbol(u8, 'E', huffman, Code{ .value = 0b110, .bit_length = 3 });
+    try expectSymbol(u8, 'F', huffman, Code{ .value = 0b00, .bit_length = 2 });
+    try expectSymbol(u8, 'G', huffman, Code{ .value = 0b1110, .bit_length = 4 });
+    try expectSymbol(u8, 'H', huffman, Code{ .value = 0b1111, .bit_length = 4 });
+    try std.testing.expect(huffman.getCode(Code{ .bit_length = 3, .value = 0b011 }) == 'B');
 }
 
 test "fromCodeLengths single symbol" {
