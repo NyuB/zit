@@ -4,9 +4,7 @@ const huffman = @import("huffman.zig");
 
 const DecodeErrors = error{ IllegalFlagCheck, ReservedBlockType, IllegalLiteralLength };
 
-fn decode(reader: anytype, writer: void) DecodeErrors!void {
-    _ = writer;
-
+fn decode(reader: anytype, writer: anytype) DecodeErrors!void {
     const compressionMethodAndFlags = reader.readCompressionMethodAndFlags();
 
     switch (compressionMethodAndFlags.compressionMethod) {
@@ -23,18 +21,20 @@ fn decode(reader: anytype, writer: void) DecodeErrors!void {
         switch (blockType) {
             .Raw => unreachable,
             .Fixed => {
-                switch (readLiteralLength(reader)) {
-                    .Literal => |c| {
-                        _ = c;
-                    },
-                    .Length => |l| {
-                        _ = l;
-                        unreachable;
-                    },
-                    .EndOfBlock => {
-                        unreachable;
-                    },
-                    .Unused => return DecodeErrors.IllegalLiteralLength,
+                block: while (true) {
+                    switch (readLiteralLength(reader)) {
+                        .Literal => |c| {
+                            writer.write(c);
+                        },
+                        .Length => |l| {
+                            _ = l;
+                            unreachable;
+                        },
+                        .EndOfBlock => {
+                            break :block;
+                        },
+                        .Unused => return DecodeErrors.IllegalLiteralLength,
+                    }
                 }
             },
             .Dynamic => unreachable,
@@ -169,6 +169,16 @@ const TestReaderWriter = struct {
         const bytesAsU16 = [2]u8{ self.input[self.read_index + 1], self.input[self.read_index] };
         self.read_index += 2;
         return @bitCast(bytesAsU16);
+    }
+
+    fn write(self: *TestReaderWriter, b: u8) void {
+        self.output[self.write_index] = b;
+        self.write_index += 1;
+    }
+
+    fn writeSlice(self: *TestReaderWriter, bs: []const u8) void {
+        @memcpy(self.output[self.write_index..], bs);
+        self.write_index += bs.len;
     }
 };
 
@@ -341,12 +351,14 @@ const DISTANCE_TABLE = [32]DistanceCode{
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualDeep = std.testing.expectEqualDeep;
+const expectEqualStrings = std.testing.expectEqualStrings;
 
-test "Decode" {
+test "decode (only literals)" {
     const content = @embedFile("test-zlib/git-blob.z");
-    const output = &[_]u8{};
-    var testWR = TestReaderWriter{ .input = content, .output = output };
-    try decode(&testWR, {});
+    var output: [16]u8 = undefined;
+    var testWR = TestReaderWriter{ .input = content, .output = &output };
+    try decode(&testWR, &testWR);
+    try expectEqualStrings("blob 9\x00Hello Zit", output[0..testWR.write_index]);
 }
 
 test "Tables consistency" {
