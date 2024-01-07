@@ -2,9 +2,9 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const huffman = @import("huffman.zig");
 
-const DecodeErrors = error{ IllegalFlagCheck, ReservedBlockType, IllegalLiteralLength };
+const DecodeErrors = error{ IllegalFlagCheck, ReservedBlockType, IllegalLiteralLength, AllocationError, Unexpected };
 
-fn decode(reader: anytype, writer: anytype) DecodeErrors!void {
+fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) DecodeErrors!void {
     const compressionMethodAndFlags = reader.readCompressionMethodAndFlags();
 
     switch (compressionMethodAndFlags.compressionMethod) {
@@ -23,9 +23,7 @@ fn decode(reader: anytype, writer: anytype) DecodeErrors!void {
             .Fixed => {
                 block: while (true) {
                     switch (readLiteralLength(reader)) {
-                        .Literal => |c| {
-                            writer.write(c);
-                        },
+                        .Literal => |c| writer.write(c),
                         .Length => |l| {
                             _ = l;
                             unreachable;
@@ -37,20 +35,144 @@ fn decode(reader: anytype, writer: anytype) DecodeErrors!void {
                     }
                 }
             },
-            .Dynamic => unreachable,
+            .Dynamic => {
+                var codex = try DynamicCodex.init(allocator, reader);
+                defer codex.deinit();
+                block: while (true) {
+                    switch (codex.readLiteralLength(reader)) {
+                        .Literal => |c| writer.write(c),
+                        .Length => |l| {
+                            const len = l.min_value + reader.readBitsRev(l.extra_bits);
+                            const d = codex.readDistance(reader);
+                            const distance: usize = d.min_value + reader.readBitsRev(d.extra_bits);
+                            writer.writeFromPast(len, distance);
+                        },
+                        .EndOfBlock => break :block,
+                        .Unused => return DecodeErrors.IllegalLiteralLength,
+                    }
+                }
+            },
             .Reserved => return DecodeErrors.ReservedBlockType,
         }
     }
 }
 
-fn readLiteralLength(reader: anytype) LiteralLengthCode {
-    var cursor = FIXED_LITERAL_LENGTH_HUFFMAN.cursor();
-    var s: ?u9 = null;
+const DynamicCodex = struct {
+    literalLengths: huffman.Huffman(u9),
+    distances: huffman.Huffman(u5),
+
+    fn init(allocator: std.mem.Allocator, reader: anytype) DecodeErrors!DynamicCodex {
+        const hlit = reader.readBitsRev(5);
+        const hdist = reader.readBitsRev(5);
+        const hlen = reader.readBitsRev(4);
+
+        var dynamicCodeLength = try DynamicCodeLength.init(allocator, hlen + 4, reader);
+        defer dynamicCodeLength.deinit();
+
+        var literalLengthCode = try dynamicCodeLength.buildHuffmanCode(allocator, u9, &LITERAL_LENGTH_SYMBOLS, hlit + 257, reader);
+        errdefer literalLengthCode.deinit();
+
+        var distanceCode = try dynamicCodeLength.buildHuffmanCode(allocator, u5, &DISTANCE_CODE_SYMBOLS, hdist + 1, reader);
+        errdefer distanceCode.deinit();
+
+        return .{ .literalLengths = literalLengthCode, .distances = distanceCode };
+    }
+
+    fn readLiteralLength(self: DynamicCodex, reader: anytype) LiteralLengthCode {
+        const index = readSymbol(u9, self.literalLengths, reader);
+        return LITERAL_LENGTH_CODE_TABLE[index];
+    }
+
+    fn readDistance(self: DynamicCodex, reader: anytype) DistanceCode {
+        const index = readSymbol(u5, self.distances, reader);
+        return DISTANCE_TABLE[index];
+    }
+
+    fn deinit(self: *DynamicCodex) void {
+        self.literalLengths.deinit();
+        self.distances.deinit();
+    }
+};
+
+const DynamicCodeLength = struct {
+    huffmanCode: huffman.Huffman(u5),
+
+    fn init(allocator: std.mem.Allocator, lengthsToRead: usize, reader: anytype) DecodeErrors!DynamicCodeLength {
+        var codeLengthAlphabet: [19]usize = undefined;
+        for (0..19) |i| {
+            codeLengthAlphabet[i] = 0;
+        }
+        for (0..lengthsToRead) |l| {
+            codeLengthAlphabet[DYNAMIC_CODE_LENGTH_SYMBOLS_ORDER[l]] = reader.readBitsRev(3);
+        }
+        var huffmanCode = huffman.Huffman(u5).fromCodeLengths(allocator, &DYNAMIC_CODE_LENGTH_SYMBOLS, &codeLengthAlphabet) catch return DecodeErrors.Unexpected;
+        return .{ .huffmanCode = huffmanCode };
+    }
+
+    fn deinit(self: *DynamicCodeLength) void {
+        self.huffmanCode.deinit();
+    }
+
+    fn buildHuffmanCode(self: DynamicCodeLength, allocator: std.mem.Allocator, comptime Symbol: type, symbols: []const Symbol, lengthsToRead: usize, reader: anytype) DecodeErrors!huffman.Huffman(Symbol) {
+        var lengths = allocator.alloc(usize, symbols.len) catch return DecodeErrors.AllocationError;
+        defer allocator.free(lengths);
+        for (0..symbols.len) |i| {
+            lengths[i] = 0;
+        }
+        var index: usize = 0;
+        while (index < lengthsToRead) {
+            index = self.readOne(reader, lengths, index);
+        }
+        if (index != lengthsToRead) return DecodeErrors.Unexpected;
+        return huffman.Huffman(Symbol).fromCodeLengths(allocator, symbols, lengths) catch return DecodeErrors.Unexpected;
+    }
+
+    fn readOne(self: DynamicCodeLength, reader: anytype, output: []usize, outputIndex: usize) usize {
+        const s = readSymbol(u5, self.huffmanCode, reader);
+        switch (s) {
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 => {
+                output[outputIndex] = s;
+                return outputIndex + 1;
+            },
+            16 => {
+                const extra = reader.readBitsRev(2);
+                for (0..extra + 3) |i| {
+                    output[outputIndex + i] = output[outputIndex - 1];
+                }
+                return outputIndex + extra + 3;
+            },
+            17 => {
+                const extra = reader.readBitsRev(3);
+                for (0..extra + 3) |i| {
+                    output[outputIndex + i] = 0;
+                }
+                return outputIndex + extra + 3;
+            },
+            18 => {
+                const extra = reader.readBitsRev(7);
+                for (0..extra + 11) |i| {
+                    output[outputIndex + i] = 0;
+                }
+                return outputIndex + extra + 11;
+            },
+            else => unreachable,
+        }
+    }
+};
+
+fn readSymbol(comptime Symbol: type, h: huffman.Huffman(Symbol), reader: anytype) Symbol {
+    var s: ?Symbol = null;
+    var cursor = h.cursor();
     while (s == null) {
         const b = reader.readBits(1);
         s = cursor.next(b > 0);
     }
-    return LITERAL_LENGTH_CODE_TABLE[s orelse unreachable];
+    return s orelse unreachable;
+}
+
+fn readLiteralLength(reader: anytype) LiteralLengthCode {
+    const s = readSymbol(u9, FIXED_LITERAL_LENGTH_HUFFMAN, reader);
+    return LITERAL_LENGTH_CODE_TABLE[s];
 }
 
 const BlockType = enum(u2) {
@@ -179,6 +301,13 @@ const TestReaderWriter = struct {
     fn writeSlice(self: *TestReaderWriter, bs: []const u8) void {
         @memcpy(self.output[self.write_index..], bs);
         self.write_index += bs.len;
+    }
+
+    fn writeFromPast(self: *TestReaderWriter, len: usize, distance: usize) void {
+        for (0..len) |i| {
+            self.output[self.write_index + i] = self.output[self.write_index - distance + i];
+        }
+        self.write_index += len;
     }
 };
 
@@ -346,6 +475,11 @@ const DISTANCE_TABLE = [32]DistanceCode{
     DistanceCode{ .extra_bits = 0, .min_value = 0 },
 };
 
+const DISTANCE_CODE_SYMBOLS = [32]u5{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 };
+
+const DYNAMIC_CODE_LENGTH_SYMBOLS = [19]u5{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18 };
+const DYNAMIC_CODE_LENGTH_SYMBOLS_ORDER = [19]usize{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
+
 // Tests
 
 const expect = std.testing.expect;
@@ -357,8 +491,32 @@ test "decode (only literals)" {
     const content = @embedFile("test-zlib/git-blob.z");
     var output: [16]u8 = undefined;
     var testWR = TestReaderWriter{ .input = content, .output = &output };
-    try decode(&testWR, &testWR);
+    try decode(std.testing.allocator, &testWR, &testWR);
     try expectEqualStrings("blob 9\x00Hello Zit", output[0..testWR.write_index]);
+}
+
+test "decode (dynamic encoding)" {
+    const content = @embedFile("test-zlib/poeme.z");
+    var output: [1000]u8 = undefined;
+    var testWR = TestReaderWriter{ .input = content, .output = &output };
+    try decode(std.testing.allocator, &testWR, &testWR);
+    const expected =
+        \\Demain, dès l'aube, à l'heure où blanchit la campagne,
+        \\Je partirai. Vois-tu, je sais que tu m'attends.
+        \\J'irai par la forêt, j'irai par la montagne.
+        \\Je ne puis demeurer loin de toi plus longtemps.
+        \\
+        \\Je marcherai les yeux fixés sur mes pensées,
+        \\Sans rien voir au dehors, sans entendre aucun bruit,
+        \\Seul, inconnu, le dos courbé, les mains croisées,
+        \\Triste, et le jour pour moi sera comme la nuit.
+        \\
+        \\Je ne regarderai ni l'or du soir qui tombe,
+        \\Ni les voiles au loin descendant vers Harfleur,
+        \\Et quand j'arriverai, je mettrai sur ta tombe
+        \\Un bouquet de houx vert et de bruyère en fleur.
+    ;
+    try expectEqualStrings(expected, output[0..testWR.write_index]);
 }
 
 test "Tables consistency" {
