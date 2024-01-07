@@ -73,7 +73,9 @@ pub fn Huffman(comptime Symbol: type) type {
 
         fn _fromCodeLengths(arr: []?Symbol, symbols: []const Symbol, info: CodeLengthInfo) void {
             for (symbols, 0..) |s, i| {
-                insert(arr, 0, info.codes[i], s);
+                if (info.codes[i].bit_length > 0) { // Ignore lengths 0
+                    insert(arr, 0, info.codes[i], s);
+                }
             }
         }
 
@@ -164,6 +166,7 @@ const CodeLengthInfo = struct {
         }
 
         for (lengths) |l| {
+            if (l == 0) continue;
             length_occurences_buffer[l] += 1;
             if (length_occurences_buffer[l] > utils.powerOfTwo(l)) {
                 return CodeLengthInitError.IllegalCodeLengthCount;
@@ -275,6 +278,14 @@ test "fromCodeLengths single symbol" {
     defer huffman.deinit();
     var cursor = huffman.cursor();
     try std.testing.expectEqual(@as(?u8, 'A'), cursor.next(false));
+}
+
+test "fromCodeLengths ignore zero length" {
+    const symbols = "ABCDEFGH";
+    const lengths = &[_]usize{ 1, 0, 2, 0, 0, 0, 0, 2 };
+    var huffman = try Huffman(u8).fromCodeLengths(std.testing.allocator, symbols, lengths);
+    defer huffman.deinit();
+    try std.testing.expectEqualSlices(?u8, &[_]?u8{ null, 'A', null, null, null, 'C', 'H' }, huffman.arr);
 }
 
 test "fromCodeLengths illegal input (too many occurence of a given code length)" {
