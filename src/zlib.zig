@@ -233,92 +233,6 @@ const DistanceCode = struct {
     min_value: u16,
 };
 
-const TestReaderWriter = struct {
-    input: []const u8,
-    output: []u8,
-
-    read_index: usize = 0,
-    read_bit_index: u4 = 0,
-    write_index: usize = 0,
-
-    fn readBits(self: *TestReaderWriter, n: usize) usize {
-        var res: usize = 0;
-        for (0..n) |_| {
-            var mask: usize = utils.powerOfTwo(self.read_bit_index);
-            res = std.math.shl(usize, res, 1);
-            if (mask & self.input[self.read_index] > 0) {
-                res |= 1;
-            }
-            self.read_bit_index += 1;
-            if (self.read_bit_index == 8) {
-                self.read_bit_index = 0;
-                self.read_index += 1;
-            }
-        }
-        return res;
-    }
-
-    fn readBitsRev(self: *TestReaderWriter, n: usize) usize {
-        var res: usize = 0;
-        for (0..n) |i| {
-            var mask: usize = utils.powerOfTwo(self.read_bit_index);
-            if (mask & self.input[self.read_index] > 0) {
-                res |= utils.powerOfTwo(i);
-            }
-            self.read_bit_index += 1;
-            if (self.read_bit_index == 8) {
-                self.read_bit_index = 0;
-                self.read_index += 1;
-            }
-        }
-        return res;
-    }
-
-    /// Assumes **little endian**
-    fn readCompressionMethodAndFlags(self: *TestReaderWriter) CompressionMethodAndFlags {
-        const res = [2]u8{ self.input[self.read_index], self.input[self.read_index + 1] };
-        self.read_index += 2;
-        return std.mem.bytesToValue(CompressionMethodAndFlags, &res);
-    }
-
-    fn skipToNextByte(self: *TestReaderWriter) void {
-        if (self.read_bit_index == 0) {
-            return;
-        }
-        self.read_bit_index = 0;
-        self.read_index += 1;
-    }
-
-    fn readNLen(self: *TestReaderWriter) u16 {
-        const bytesAsU16 = [2]u8{ self.input[self.read_index + 1], self.input[self.read_index] };
-        self.read_index += 2;
-        return @bitCast(bytesAsU16);
-    }
-
-    fn readLen(self: *TestReaderWriter) u16 {
-        const bytesAsU16 = [2]u8{ self.input[self.read_index + 1], self.input[self.read_index] };
-        self.read_index += 2;
-        return @bitCast(bytesAsU16);
-    }
-
-    fn write(self: *TestReaderWriter, b: u8) void {
-        self.output[self.write_index] = b;
-        self.write_index += 1;
-    }
-
-    fn writeSlice(self: *TestReaderWriter, bs: []const u8) void {
-        @memcpy(self.output[self.write_index..], bs);
-        self.write_index += bs.len;
-    }
-
-    fn writeFromPast(self: *TestReaderWriter, len: usize, distance: usize) void {
-        for (0..len) |i| {
-            self.output[self.write_index + i] = self.output[self.write_index - distance + i];
-        }
-        self.write_index += len;
-    }
-};
-
 // Fixed tables
 
 const LITERAL_LENGTH_CODE_TABLE: [288]LiteralLengthCode = fill: {
@@ -500,7 +414,7 @@ test "decode (only literals)" {
     var output: [16]u8 = undefined;
     var testWR = TestReaderWriter{ .input = content, .output = &output };
     try decode(std.testing.allocator, &testWR, &testWR);
-    try expectEqualStrings("blob 9\x00Hello Zit", output[0..testWR.write_index]);
+    try expectEqualStrings("blob 9\x00Hello Zit", testWR.written());
 }
 
 test "decode (dynamic encoding)" {
@@ -524,7 +438,7 @@ test "decode (dynamic encoding)" {
         \\Et quand j'arriverai, je mettrai sur ta tombe
         \\Un bouquet de houx vert et de bruyère en fleur.
     ;
-    try expectEqualStrings(expected, output[0..testWR.write_index]);
+    try expectEqualStrings(expected, testWR.written());
 }
 
 test "Tables consistency" {
@@ -585,3 +499,93 @@ test "Fixed Hufffman Literal/Lengths codes" {
         try expectEqual(@as(?u9, code), FIXED_LITERAL_LENGTH_HUFFMAN.getCode(huffman.Code{ .bit_length = 8, .value = 0b1100_0000 + n - 280 }));
     }
 }
+
+const TestReaderWriter = struct {
+    input: []const u8,
+    output: []u8,
+
+    read_index: usize = 0,
+    read_bit_index: u4 = 0,
+    write_index: usize = 0,
+
+    fn readBits(self: *TestReaderWriter, n: usize) usize {
+        var res: usize = 0;
+        for (0..n) |_| {
+            var mask: usize = utils.powerOfTwo(self.read_bit_index);
+            res = std.math.shl(usize, res, 1);
+            if (mask & self.input[self.read_index] > 0) {
+                res |= 1;
+            }
+            self.read_bit_index += 1;
+            if (self.read_bit_index == 8) {
+                self.read_bit_index = 0;
+                self.read_index += 1;
+            }
+        }
+        return res;
+    }
+
+    fn readBitsRev(self: *TestReaderWriter, n: usize) usize {
+        var res: usize = 0;
+        for (0..n) |i| {
+            var mask: usize = utils.powerOfTwo(self.read_bit_index);
+            if (mask & self.input[self.read_index] > 0) {
+                res |= utils.powerOfTwo(i);
+            }
+            self.read_bit_index += 1;
+            if (self.read_bit_index == 8) {
+                self.read_bit_index = 0;
+                self.read_index += 1;
+            }
+        }
+        return res;
+    }
+
+    /// Assumes **little endian**
+    fn readCompressionMethodAndFlags(self: *TestReaderWriter) CompressionMethodAndFlags {
+        const res = [2]u8{ self.input[self.read_index], self.input[self.read_index + 1] };
+        self.read_index += 2;
+        return std.mem.bytesToValue(CompressionMethodAndFlags, &res);
+    }
+
+    fn skipToNextByte(self: *TestReaderWriter) void {
+        if (self.read_bit_index == 0) {
+            return;
+        }
+        self.read_bit_index = 0;
+        self.read_index += 1;
+    }
+
+    fn readNLen(self: *TestReaderWriter) u16 {
+        const bytesAsU16 = [2]u8{ self.input[self.read_index + 1], self.input[self.read_index] };
+        self.read_index += 2;
+        return @bitCast(bytesAsU16);
+    }
+
+    fn readLen(self: *TestReaderWriter) u16 {
+        const bytesAsU16 = [2]u8{ self.input[self.read_index + 1], self.input[self.read_index] };
+        self.read_index += 2;
+        return @bitCast(bytesAsU16);
+    }
+
+    fn write(self: *TestReaderWriter, b: u8) void {
+        self.output[self.write_index] = b;
+        self.write_index += 1;
+    }
+
+    fn writeSlice(self: *TestReaderWriter, bs: []const u8) void {
+        @memcpy(self.output[self.write_index..], bs);
+        self.write_index += bs.len;
+    }
+
+    fn writeFromPast(self: *TestReaderWriter, len: usize, distance: usize) void {
+        for (0..len) |i| {
+            self.output[self.write_index + i] = self.output[self.write_index - distance + i];
+        }
+        self.write_index += len;
+    }
+
+    fn written(self: TestReaderWriter) []const u8 {
+        return self.output[0..self.write_index];
+    }
+};
