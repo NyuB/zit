@@ -30,7 +30,16 @@ fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) Decode
         b_final = reader.readBits(1) > 0;
         const blockType: BlockType = @enumFromInt(reader.readBitsRev(2));
         switch (blockType) {
-            .Raw => return DecodeErrors.NotImplemented,
+            .Raw => {
+                reader.skipToNextByte();
+                const len: u16 = @truncate(reader.readBitsRev(16));
+                const nlen: u16 = @truncate(reader.readBitsRev(16));
+                if (len != ~nlen) return DecodeErrors.Unexpected;
+                for (0..len) |_| {
+                    const c: u8 = @truncate(reader.readBitsRev(8));
+                    writer.write(c);
+                }
+            },
             .Fixed => {
                 block: while (true) {
                     switch (readLiteralLength(reader)) {
@@ -481,6 +490,22 @@ test "decode (allocation failure)" {
     }
 }
 
+test "decode (raw section)" {
+    const content = [_]u8{
+        0b0100_1000, // cinfo = 7, cm = 8
+        0b00_0_01101, // flevel = 00, fdict = 0, fcheck = 13
+        0b00_1, //btype = 00, bfinal = 1
+        0b0000_0101, 0b0000_0000, // LEN = 5
+        0b1111_1010, 0b1111_1111, // NLEN = ~LEN
+        'H', 'e', 'l', 'l', 'o', // 5 bytes of data
+        0x05, 0x8C, 0x01, 0xF5, // Adler32 Checksum
+    };
+    var output: [5]u8 = undefined;
+    var testWR = TestReaderWriter{ .input = &content, .output = &output };
+    try decode(std.testing.allocator, &testWR, &testWR);
+    try expectEqualStrings("Hello", testWR.written());
+}
+
 test "Tables consistency" {
     for (0..256) |c| {
         const char: u8 = @truncate(c);
@@ -595,18 +620,6 @@ const TestReaderWriter = struct {
         }
         self.read_bit_index = 0;
         self.read_index += 1;
-    }
-
-    fn readNLen(self: *TestReaderWriter) u16 {
-        const bytesAsU16 = [2]u8{ self.input[self.read_index + 1], self.input[self.read_index] };
-        self.read_index += 2;
-        return @bitCast(bytesAsU16);
-    }
-
-    fn readLen(self: *TestReaderWriter) u16 {
-        const bytesAsU16 = [2]u8{ self.input[self.read_index + 1], self.input[self.read_index] };
-        self.read_index += 2;
-        return @bitCast(bytesAsU16);
     }
 
     fn write(self: *TestReaderWriter, b: u8) void {
