@@ -9,6 +9,7 @@ const DecodeErrors = error{
     IllegalCompressionMethod,
     IllegalFlagCheck,
     IllegalLiteralLength,
+    MismatchingCheckSum,
     Unexpected,
     NotImplemented,
 };
@@ -53,6 +54,15 @@ fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) Decode
             .Reserved => return DecodeErrors.IllegalBlockType,
         }
     }
+    reader.skipToNextByte();
+    const checkSum = readCheckSum(reader);
+    const actualCheckSum = writer.computeAdler32AndReset();
+    if (checkSum != actualCheckSum) return DecodeErrors.MismatchingCheckSum;
+}
+
+fn readCheckSum(reader: anytype) u32 {
+    const res: u32 = @truncate(reader.readBitsRev(32));
+    return @byteSwap(res);
 }
 
 fn readBlock(codex: anytype, reader: anytype, writer: anytype) DecodeErrors!void {
@@ -513,6 +523,7 @@ const TestReaderWriter = struct {
     read_index: usize = 0,
     read_bit_index: u4 = 0,
     write_index: usize = 0,
+    adler32: std.hash.Adler32 = std.hash.Adler32.init(),
 
     fn readBits(self: *TestReaderWriter, n: usize) usize {
         var res: usize = 0;
@@ -576,11 +587,13 @@ const TestReaderWriter = struct {
 
     fn write(self: *TestReaderWriter, b: u8) void {
         self.output[self.write_index] = b;
+        self.adler32.update(self.output[self.write_index .. self.write_index + 1]);
         self.write_index += 1;
     }
 
     fn writeSlice(self: *TestReaderWriter, bs: []const u8) void {
         @memcpy(self.output[self.write_index..], bs);
+        self.adler32.update(bs);
         self.write_index += bs.len;
     }
 
@@ -588,10 +601,17 @@ const TestReaderWriter = struct {
         for (0..len) |i| {
             self.output[self.write_index + i] = self.output[self.write_index - distance + i];
         }
+        self.adler32.update(self.output[self.write_index .. self.write_index + len]);
         self.write_index += len;
     }
 
     fn written(self: TestReaderWriter) []const u8 {
         return self.output[0..self.write_index];
+    }
+
+    fn computeAdler32AndReset(self: *TestReaderWriter) u32 {
+        const res = self.adler32.final();
+        self.adler32 = std.hash.Adler32.init();
+        return res;
     }
 };
