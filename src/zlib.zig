@@ -129,8 +129,14 @@ const DynamicCodeLength = struct {
         for (0..lengthsToRead) |l| {
             codeLengthAlphabet[DYNAMIC_CODE_LENGTH_SYMBOLS_ORDER[l]] = reader.readBitsRev(3);
         }
-        var huffmanCode = huffman.Huffman(u5).fromCodeLengths(allocator, &DYNAMIC_CODE_LENGTH_SYMBOLS, &codeLengthAlphabet) catch return DecodeErrors.Unexpected;
-        return .{ .huffmanCode = huffmanCode };
+        if (huffman.Huffman(u5).fromCodeLengths(allocator, &DYNAMIC_CODE_LENGTH_SYMBOLS, &codeLengthAlphabet)) |huffmanCode| {
+            return .{ .huffmanCode = huffmanCode };
+        } else |err| {
+            return switch (err) {
+                huffman.CodeLengthInitError.AllocationError => DecodeErrors.AllocationError,
+                else => DecodeErrors.Unexpected,
+            };
+        }
     }
 
     fn deinit(self: *DynamicCodeLength) void {
@@ -148,7 +154,12 @@ const DynamicCodeLength = struct {
             index = try self.readOneCodeLength(reader, lengths, index);
         }
         if (index != lengthsToRead) return DecodeErrors.Unexpected;
-        return huffman.Huffman(Symbol).fromCodeLengths(allocator, symbols, lengths) catch return DecodeErrors.Unexpected;
+        if (huffman.Huffman(Symbol).fromCodeLengths(allocator, symbols, lengths)) |code| return code else |err| {
+            return switch (err) {
+                huffman.CodeLengthInitError.AllocationError => DecodeErrors.AllocationError,
+                else => DecodeErrors.Unexpected,
+            };
+        }
     }
 
     fn readOneCodeLength(self: DynamicCodeLength, reader: anytype, output: []usize, outputIndex: usize) DecodeErrors!usize {
@@ -424,6 +435,7 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualDeep = std.testing.expectEqualDeep;
 const expectEqualStrings = std.testing.expectEqualStrings;
+const expectError = std.testing.expectError;
 
 test "decode (only literals)" {
     const content = @embedFile("test-zlib/git-blob.z");
@@ -455,6 +467,18 @@ test "decode (dynamic encoding)" {
         \\Un bouquet de houx vert et de bruyère en fleur.
     ;
     try expectEqualStrings(expected, testWR.written());
+}
+
+test "decode (allocation failure)" {
+    const content = @embedFile("test-zlib/poeme.z");
+    var output: [16]u8 = undefined;
+
+    for (0..5) |allocationFailureTiming| {
+        var testWR = TestReaderWriter{ .input = content, .output = &output };
+        var failingAllocator = std.testing.FailingAllocator.init(std.testing.allocator, allocationFailureTiming);
+        var actual = decode(failingAllocator.allocator(), &testWR, &testWR);
+        try expectError(DecodeErrors.AllocationError, actual);
+    }
 }
 
 test "Tables consistency" {

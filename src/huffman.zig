@@ -120,7 +120,7 @@ pub fn Huffman(comptime Symbol: type) type {
     };
 }
 
-const CodeLengthInitError = error{
+pub const CodeLengthInitError = error{
     MismatchingCounts,
     IllegalCodeLengthCount,
     AllocationError,
