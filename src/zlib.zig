@@ -46,21 +46,25 @@ fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) Decode
             .Dynamic => {
                 var codex = try DynamicCodex.init(allocator, reader);
                 defer codex.deinit();
-                block: while (true) {
-                    switch (codex.readLiteralLength(reader)) {
-                        .Literal => |c| writer.write(c),
-                        .Length => |l| {
-                            const len = l.min_value + reader.readBitsRev(l.extra_bits);
-                            const d = codex.readDistance(reader);
-                            const distance: usize = d.min_value + reader.readBitsRev(d.extra_bits);
-                            writer.writeFromPast(len, distance);
-                        },
-                        .EndOfBlock => break :block,
-                        .Unused => return DecodeErrors.IllegalLiteralLength,
-                    }
-                }
+                try readBlock(codex, reader, writer);
             },
             .Reserved => return DecodeErrors.IllegalBlockType,
+        }
+    }
+}
+
+fn readBlock(codex: anytype, reader: anytype, writer: anytype) DecodeErrors!void {
+    block: while (true) {
+        switch (codex.readLiteralLength(reader)) {
+            .Literal => |c| writer.write(c),
+            .Length => |l| {
+                const len = l.min_value + reader.readBitsRev(l.extra_bits);
+                const d = codex.readDistance(reader);
+                const distance: usize = d.min_value + reader.readBitsRev(d.extra_bits);
+                writer.writeFromPast(len, distance);
+            },
+            .EndOfBlock => break :block,
+            .Unused => return DecodeErrors.IllegalLiteralLength,
         }
     }
 }
