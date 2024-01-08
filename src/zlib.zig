@@ -129,13 +129,13 @@ const DynamicCodeLength = struct {
         }
         var index: usize = 0;
         while (index < lengthsToRead) {
-            index = try self.readOne(reader, lengths, index);
+            index = try self.readOneCodeLength(reader, lengths, index);
         }
         if (index != lengthsToRead) return DecodeErrors.Unexpected;
         return huffman.Huffman(Symbol).fromCodeLengths(allocator, symbols, lengths) catch return DecodeErrors.Unexpected;
     }
 
-    fn readOne(self: DynamicCodeLength, reader: anytype, output: []usize, outputIndex: usize) DecodeErrors!usize {
+    fn readOneCodeLength(self: DynamicCodeLength, reader: anytype, output: []usize, outputIndex: usize) DecodeErrors!usize {
         const s = readSymbol(u5, self.huffmanCode, reader);
         switch (s) {
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 => {
