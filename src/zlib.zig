@@ -10,14 +10,16 @@ const DecodeErrors = error{
     IllegalFlagCheck,
     IllegalLiteralLength,
     Unexpected,
+    NotImplemented,
 };
 
 fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) DecodeErrors!void {
     const compressionMethodAndFlags = reader.readCompressionMethodAndFlags();
+    if (compressionMethodAndFlags.flagDict) return DecodeErrors.NotImplemented;
 
     switch (compressionMethodAndFlags.compressionMethod) {
         8 => {},
-        else => return DecodeErrors.IllegalCompressionMethod,
+        else => return DecodeErrors.NotImplemented,
     }
 
     try compressionMethodAndFlags.check();
@@ -27,14 +29,14 @@ fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) Decode
         b_final = reader.readBits(1) > 0;
         const blockType: BlockType = @enumFromInt(reader.readBitsRev(2));
         switch (blockType) {
-            .Raw => unreachable,
+            .Raw => return DecodeErrors.NotImplemented,
             .Fixed => {
                 block: while (true) {
                     switch (readLiteralLength(reader)) {
                         .Literal => |c| writer.write(c),
                         .Length => |l| {
                             _ = l;
-                            unreachable;
+                            return DecodeErrors.NotImplemented;
                         },
                         .EndOfBlock => {
                             break :block;
