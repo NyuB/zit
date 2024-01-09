@@ -66,6 +66,7 @@ fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) Decode
     reader.skipToNextByte();
     const checkSum = readCheckSum(reader);
     const actualCheckSum = writer.computeAdler32AndReset();
+    std.debug.print("Decoded {s}\n", .{writer.written()});
     if (checkSum != actualCheckSum) return DecodeErrors.MismatchingCheckSum;
 }
 
@@ -504,6 +505,30 @@ test "decode (raw section)" {
     var testWR = TestReaderWriter{ .input = &content, .output = &output };
     try decode(std.testing.allocator, &testWR, &testWR);
     try expectEqualStrings("Hello", testWR.written());
+}
+
+test "decode (fixed codes)" {
+    const content = [_]u8{
+        0b0100_1000, // cinfo = 7, cm = 8
+        0b00_0_01101, // flevel = 00, fdict = 0, fcheck = 13
+        0b11110_01_1, // first 5 bits of 72='H'=01111_000, btype = 01, bfinal = 1
+        0b00000_000, // first 5 bits of end of block=0000000, last 3 bits of 72=01111_000
+        0b000000_00, // padding, last 2 bits of end of block
+        0x00, 0x49, 0x00, 0x49, // checksum
+    };
+
+    const file = try std.fs.createFileAbsolute(
+        "C:/Users/Brice/Documents/Projects/Zit/h.z",
+        .{},
+    );
+    defer file.close();
+    _ = try file.writeAll(&content);
+
+    var output: [1]u8 = undefined;
+    var testWR = TestReaderWriter{ .input = &content, .output = &output };
+    try decode(std.testing.allocator, &testWR, &testWR);
+
+    try expectEqualStrings("H", testWR.written());
 }
 
 test "Tables consistency" {
