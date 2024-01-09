@@ -14,7 +14,7 @@ const DecodeErrors = error{
     NotImplemented,
 };
 
-fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) DecodeErrors!void {
+pub fn decode(allocator: std.mem.Allocator, reader: anytype, writer: anytype) DecodeErrors!void {
     const compressionMethodAndFlags = reader.readCompressionMethodAndFlags();
     if (compressionMethodAndFlags.flagDict) return DecodeErrors.NotImplemented;
 
@@ -581,28 +581,25 @@ test "Fixed Hufffman Literal/Lengths codes" {
     }
 }
 
-const TestReaderWriter = struct {
+pub const TestReaderWriter = struct {
     input: []const u8,
     output: []u8,
 
     read_index: usize = 0,
-    read_bit_index: u4 = 0,
+    read_bit_mask: u8 = 0b0000_0001,
     write_index: usize = 0,
     adler32: std.hash.Adler32 = std.hash.Adler32.init(),
 
     fn readBits(self: *TestReaderWriter, n: usize) usize {
         var res: usize = 0;
         for (0..n) |_| {
-            var mask: usize = utils.powerOfTwo(self.read_bit_index);
             res = std.math.shl(usize, res, 1);
-            if (mask & self.input[self.read_index] > 0) {
+            if (self.read_bit_mask & self.input[self.read_index] > 0) {
                 res |= 1;
             }
-            self.read_bit_index += 1;
-            if (self.read_bit_index == 8) {
-                self.read_bit_index = 0;
-                self.read_index += 1;
-            }
+            const shift_left = @shlWithOverflow(self.read_bit_mask, 1);
+            self.read_bit_mask = shift_left[0] + shift_left[1];
+            self.read_index += shift_left[1];
         }
         return res;
     }
@@ -610,15 +607,12 @@ const TestReaderWriter = struct {
     fn readBitsRev(self: *TestReaderWriter, n: usize) usize {
         var res: usize = 0;
         for (0..n) |i| {
-            var mask: usize = utils.powerOfTwo(self.read_bit_index);
-            if (mask & self.input[self.read_index] > 0) {
+            if (self.read_bit_mask & self.input[self.read_index] > 0) {
                 res |= utils.powerOfTwo(i);
             }
-            self.read_bit_index += 1;
-            if (self.read_bit_index == 8) {
-                self.read_bit_index = 0;
-                self.read_index += 1;
-            }
+            const shift_left = @shlWithOverflow(self.read_bit_mask, 1);
+            self.read_bit_mask = shift_left[0] + shift_left[1];
+            self.read_index += shift_left[1];
         }
         return res;
     }
@@ -631,10 +625,10 @@ const TestReaderWriter = struct {
     }
 
     fn skipToNextByte(self: *TestReaderWriter) void {
-        if (self.read_bit_index == 0) {
+        if (self.read_bit_mask == 1) {
             return;
         }
-        self.read_bit_index = 0;
+        self.read_bit_mask = 1;
         self.read_index += 1;
     }
 
