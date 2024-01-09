@@ -169,12 +169,12 @@ test "abc" {
 }
 
 test "SHA1LongMsg NIST Vectors" {
-    const content = @embedFile("test-vectors/shabytetestvectors/SHA1LongMsg.rsp");
+    const content = @embedFile("test-sha1/shabytetestvectors/SHA1LongMsg.rsp");
     try testNISTVector(content);
 }
 
 test "SHA1ShortMsg NIST Vectors" {
-    const content = @embedFile("test-vectors/shabytetestvectors/SHA1ShortMsg.rsp");
+    const content = @embedFile("test-sha1/shabytetestvectors/SHA1ShortMsg.rsp");
     try testNISTVector(content);
 }
 

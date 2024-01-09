@@ -20,7 +20,7 @@ pub fn main() !void {
 }
 
 fn hashBenchmarkBig() i128 {
-    const content = @embedFile("test-vectors/shabytetestvectors/SHA1LongMsg.rsp");
+    const content = @embedFile("test-sha1/shabytetestvectors/SHA1LongMsg.rsp");
     var hasher = sha1.SHA1{};
     hasher.updateSlice(content);
     const h = hasher.end();
@@ -37,7 +37,7 @@ fn hashBenchmarkBig() i128 {
 }
 
 fn hashBenchmarkSmall() i128 {
-    const content = "test-vectors/shabytetestvectors/SHA1LongMsg.rsp";
+    const content = "!___Some_Short_String__gnirtS_trohS_emoS___!";
     var hasher = sha1.SHA1{};
     hasher.updateSlice(content);
     const h = hasher.end();
