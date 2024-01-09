@@ -495,6 +495,8 @@ test "decode (raw section)" {
         'H', 'e', 'l', 'l', 'o', // 5 bytes of data
         0x05, 0x8C, 0x01, 0xF5, // Adler32 Checksum
     };
+    try expectEqualStrings(@embedFile("test-zlib/raw.z"), &content);
+
     var output: [5]u8 = undefined;
     var testWR = TestReaderWriter{ .input = &content, .output = &output };
     try decode(std.testing.allocator, &testWR, &testWR);
@@ -512,6 +514,7 @@ test "decode (fixed codes)" {
         0b0_0000000, // padding, end-of-block
         0x07, 0xf1, 0x02, 0xa5, // checksum
     };
+    try expectEqualStrings(@embedFile("test-zlib/fixed.z"), &content);
 
     var output: [5]u8 = undefined;
     var testWR = TestReaderWriter{ .input = &content, .output = &output };
