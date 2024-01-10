@@ -31,6 +31,8 @@ pub fn main() !void {
             break :r hashBenchmarkBig(iter);
         } else if (std.mem.eql(u8, name, "sha1:small")) r: {
             break :r hashBenchmarkSmall(iter);
+        } else if (std.mem.eql(u8, name, "sha1-ref:big")) r: {
+            break :r hashRefBig(iter);
         } else if (std.mem.eql(u8, name, "zlib:decompress")) r: {
             break :r try decompressBenchmark("test-zlib/geo.z", iter);
         } else if (std.mem.eql(u8, name, "zlib-ref:decompress")) r: {
@@ -55,6 +57,26 @@ fn hashBenchmarkBig(iter: usize) i128 {
     }
     const end = std.time.nanoTimestamp();
     std.debug.print("Hash {x}\n", .{h});
+    return end - start;
+}
+
+fn hashRefBig(iter: usize) i128 {
+    const content = @embedFile("test-sha1/shabytetestvectors/SHA1LongMsg.rsp");
+    var hasher = std.crypto.hash.Sha1.init(.{});
+    hasher.update(content);
+    var out: [20]u8 = undefined;
+    hasher.final(&out);
+    const h: u160 = @bitCast(out);
+    const start = std.time.nanoTimestamp();
+    for (0..iter) |_| {
+        hasher = std.crypto.hash.Sha1.init(.{});
+        hasher.update(content);
+        hasher.final(&out);
+        const hbis: u160 = @bitCast(out);
+        if (h != hbis) @panic("Invalid benchmark");
+    }
+    const end = std.time.nanoTimestamp();
+    std.debug.print("Hash {x}\n", .{@byteSwap(h)});
     return end - start;
 }
 
