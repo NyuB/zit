@@ -19,6 +19,32 @@ fn Diff(comptime T: type) type {
     return []const DiffItem(T);
 }
 
+const Myers = struct {
+    const KArray = struct {
+        arr: []usize,
+        d: i64,
+        allocator: std.mem.Allocator,
+        fn init(allocator: std.mem.Allocator, d: usize) !KArray {
+            var arr = try allocator.alloc(usize, d * 2 + 1);
+            return .{ .arr = arr, .d = @intCast(d), .allocator = allocator };
+        }
+
+        fn set(self: *KArray, signedIndex: i64, value: usize) void {
+            const index: usize = @intCast(signedIndex + self.d);
+            self.arr[index] = value;
+        }
+
+        fn get(self: KArray, signedIndex: i64) usize {
+            const index: usize = @intCast(signedIndex + self.d);
+            return self.arr[index];
+        }
+
+        fn deinit(self: *KArray) void {
+            self.allocator.free(self.arr);
+        }
+    };
+};
+
 // Tests
 const String = []const u8;
 const Lines = []const String;
@@ -103,6 +129,31 @@ test "Multiple inserts at once" {
     };
     try applyDiff(u8, &diff, original, writer);
     try std.testing.expectEqualStrings(expected, result.items);
+}
+
+test "KArray" {
+    var arrOdd = try Myers.KArray.init(std.testing.allocator, 1);
+    defer arrOdd.deinit();
+    var arrEven = try Myers.KArray.init(std.testing.allocator, 2);
+    defer arrEven.deinit();
+
+    arrOdd.set(-1, 0);
+    arrOdd.set(0, 1);
+    arrOdd.set(1, 2);
+    try std.testing.expect(arrOdd.get(-1) == 0);
+    try std.testing.expect(arrOdd.get(0) == 1);
+    try std.testing.expect(arrOdd.get(1) == 2);
+
+    arrEven.set(2, 4);
+    arrEven.set(-2, 0);
+    arrEven.set(1, 3);
+    arrEven.set(-1, 1);
+    arrEven.set(0, 2);
+    try std.testing.expect(arrEven.get(-2) == 0);
+    try std.testing.expect(arrEven.get(-1) == 1);
+    try std.testing.expect(arrEven.get(0) == 2);
+    try std.testing.expect(arrEven.get(1) == 3);
+    try std.testing.expect(arrEven.get(2) == 4);
 }
 
 fn applyDiff(comptime T: type, diff: Diff(T), original: []const T, writer: anytype) !void {
