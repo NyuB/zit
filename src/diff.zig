@@ -19,31 +19,142 @@ fn Diff(comptime T: type) type {
     return []const DiffItem(T);
 }
 
-const Myers = struct {
-    const KArray = struct {
-        arr: []usize,
-        d: i64,
-        allocator: std.mem.Allocator,
-        fn init(allocator: std.mem.Allocator, d: usize) !KArray {
-            var arr = try allocator.alloc(usize, d * 2 + 1);
-            return .{ .arr = arr, .d = @intCast(d), .allocator = allocator };
+const KArray = struct {
+    arr: []usize,
+    d: i64,
+    allocator: std.mem.Allocator,
+    fn init(allocator: std.mem.Allocator, d: usize) !KArray {
+        var arr = try allocator.alloc(usize, d * 2 + 1);
+        return .{ .arr = arr, .d = @intCast(d), .allocator = allocator };
+    }
+
+    fn set(self: *KArray, signedIndex: i64, value: usize) void {
+        const index: usize = @intCast(signedIndex + self.d);
+        self.arr[index] = value;
+    }
+
+    fn get(self: KArray, signedIndex: i64) usize {
+        const index: usize = @intCast(signedIndex + self.d);
+        return self.arr[index];
+    }
+
+    fn deinit(self: *KArray) void {
+        self.allocator.free(self.arr);
+    }
+
+    fn copy(self: KArray) !KArray {
+        var arrCopy = try self.allocator.alloc(usize, self.arr.len);
+        std.mem.copy(usize, arrCopy, self.arr);
+        return .{ .arr = arrCopy, .d = self.d, .allocator = self.allocator };
+    }
+};
+
+fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
+    const BackTracker = struct {
+        arr: std.ArrayList(DiffItem(T)),
+        const Self = @This();
+        fn init(allocator: std.mem.Allocator, dMax: usize) !Self {
+            var arr = try std.ArrayList(DiffItem(T)).initCapacity(allocator, dMax);
+            return .{ .arr = arr };
         }
 
-        fn set(self: *KArray, signedIndex: i64, value: usize) void {
-            const index: usize = @intCast(signedIndex + self.d);
-            self.arr[index] = value;
+        fn addBack(self: *Self, item: DiffItem(T)) void {
+            self.arr.appendAssumeCapacity(item);
         }
 
-        fn get(self: KArray, signedIndex: i64) usize {
-            const index: usize = @intCast(signedIndex + self.d);
-            return self.arr[index];
-        }
-
-        fn deinit(self: *KArray) void {
-            self.allocator.free(self.arr);
+        fn toOwnedSlice(self: *Self) ![]const DiffItem(T) {
+            if (self.arr.items.len >= 2) {
+                const half = self.arr.items.len / 2;
+                for (0..half) |i| {
+                    const mirror = self.arr.items.len - 1 - i;
+                    const save = self.arr.items[i];
+                    self.arr.items[i] = self.arr.items[mirror];
+                    self.arr.items[mirror] = save;
+                }
+            }
+            return try self.arr.toOwnedSlice();
         }
     };
-};
+
+    return struct {
+        pub fn diff(allocator: std.mem.Allocator, original: []const T, target: []const T) !Diff(T) {
+            const n = original.len;
+            const m = target.len;
+            const dMax = n + m;
+            var history = std.ArrayList(KArray).init(allocator);
+            defer {
+                for (history.items) |*i| {
+                    i.deinit();
+                }
+                history.deinit();
+            }
+            var v = try KArray.init(allocator, dMax);
+            v.set(1, 0);
+            for (0..dMax) |d| {
+                const kMax: i64 = @intCast(d);
+                const kMin = -kMax;
+                var k = kMin;
+                while (k <= kMax) : (k += 2) {
+                    var x: usize = if (chooseDecreaseDiagonal(k, kMin, kMax, v)) blk: {
+                        // Increase y <==> Add
+                        break :blk v.get(k + 1);
+                    } else blk: {
+                        // Increase x <==> Del
+                        break :blk v.get(k - 1) + 1;
+                    };
+
+                    var y: usize = y_of_x_and_k(x, k);
+                    while (x < n and y < m and eq(original[x], target[y])) {
+                        x += 1;
+                        y += 1;
+                    }
+                    v.set(k, x);
+
+                    if (x >= n and y >= m) {
+                        try history.append(v);
+                        var backTracker = try BackTracker.init(allocator, dMax);
+                        backTrack(&backTracker, history.items, d, x, y, k, target);
+                        return try backTracker.toOwnedSlice();
+                    }
+                }
+                try history.append(try v.copy());
+            }
+            unreachable;
+        }
+
+        fn backTrack(backTracker: *BackTracker, history: []const KArray, d: usize, xEnd: usize, yEnd: usize, kEnd: i64, target: []const T) void {
+            var k = kEnd;
+            var x = xEnd;
+            var y = yEnd;
+            var dBack = d;
+            while (x > 0 or y > 0) : (dBack -= 1) {
+                const kBackMax: i64 = @intCast(dBack);
+                const kBackMin: i64 = -kBackMax;
+                var vH = history[dBack - 1];
+                if (chooseDecreaseDiagonal(k, kBackMin, kBackMax, vH)) {
+                    k = k + 1;
+                    x = vH.get(k);
+                    y = y_of_x_and_k(x, k);
+                    backTracker.addBack(DiffItem(T){ .Add = .{ .index = x - 1, .symbols = target[y .. y + 1] } });
+                } else {
+                    k = k - 1;
+                    x = vH.get(k);
+                    y = y_of_x_and_k(x, k);
+                    backTracker.addBack(DiffItem(T){ .Del = .{ .index = x } });
+                }
+            }
+        }
+
+        fn chooseDecreaseDiagonal(k: i64, kMin: i64, kMax: i64, v: KArray) bool {
+            return k == kMin or (k != kMax and v.get(k - 1) < v.get(k + 1));
+        }
+
+        fn y_of_x_and_k(x: usize, k: i64) usize {
+            var sx: i64 = @intCast(x);
+            return @intCast(sx - k);
+        }
+    };
+}
 
 // Tests
 const String = []const u8;
@@ -132,9 +243,9 @@ test "Multiple inserts at once" {
 }
 
 test "KArray" {
-    var arrOdd = try Myers.KArray.init(std.testing.allocator, 1);
+    var arrOdd = try KArray.init(std.testing.allocator, 1);
     defer arrOdd.deinit();
-    var arrEven = try Myers.KArray.init(std.testing.allocator, 2);
+    var arrEven = try KArray.init(std.testing.allocator, 2);
     defer arrEven.deinit();
 
     arrOdd.set(-1, 0);
@@ -154,6 +265,23 @@ test "KArray" {
     try std.testing.expect(arrEven.get(0) == 2);
     try std.testing.expect(arrEven.get(1) == 3);
     try std.testing.expect(arrEven.get(2) == 4);
+}
+
+test "Paper sample" {
+    const original = "abcabba";
+    const target = "cbabac";
+    const editDistance = try Myers(u8, charEq).diff(std.testing.allocator, original, target);
+    defer std.testing.allocator.free(editDistance);
+    try std.testing.expectEqual(@as(usize, 5), editDistance.len);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 0 } }, editDistance[0]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 1 } }, editDistance[1]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .index = 2, .symbols = "b" } }, editDistance[2]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 5 } }, editDistance[3]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .index = 6, .symbols = "c" } }, editDistance[4]);
+}
+
+inline fn charEq(a: u8, b: u8) bool {
+    return a == b;
 }
 
 fn applyDiff(comptime T: type, diff: Diff(T), original: []const T, writer: anytype) !void {
