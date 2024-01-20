@@ -127,7 +127,7 @@ fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
             var x = xEnd;
             var y = yEnd;
             var dBack = d;
-            while (x > 0 or y > 0) : (dBack -= 1) {
+            while ((x > 0 or y > 0) and dBack >= 1) : (dBack -= 1) {
                 const kBackMax: i64 = @intCast(dBack);
                 const kBackMin: i64 = -kBackMax;
                 var vH = history[dBack - 1];
@@ -270,14 +270,21 @@ test "KArray" {
 test "Paper sample" {
     const original = "abcabba";
     const target = "cbabac";
-    const editDistance = try Myers(u8, charEq).diff(std.testing.allocator, original, target);
-    defer std.testing.allocator.free(editDistance);
-    try std.testing.expectEqual(@as(usize, 5), editDistance.len);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 0 } }, editDistance[0]);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 1 } }, editDistance[1]);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .index = 2, .symbols = "b" } }, editDistance[2]);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 5 } }, editDistance[3]);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .index = 6, .symbols = "c" } }, editDistance[4]);
+    const diff = try Myers(u8, charEq).diff(std.testing.allocator, original, target);
+    defer std.testing.allocator.free(diff);
+    try std.testing.expectEqual(@as(usize, 5), diff.len);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 0 } }, diff[0]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 1 } }, diff[1]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .index = 2, .symbols = "b" } }, diff[2]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 5 } }, diff[3]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .index = 6, .symbols = "c" } }, diff[4]);
+}
+
+test "No difference" {
+    const original = "aaa";
+    const diff = try Myers(u8, charEq).diff(std.testing.allocator, original, original);
+    defer std.testing.allocator.free(diff);
+    try std.testing.expectEqual(@as(usize, 0), diff.len);
 }
 
 inline fn charEq(a: u8, b: u8) bool {
