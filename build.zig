@@ -15,42 +15,8 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const benchmarks_exe = b.addExecutable(.{
-        .name = "benchmarks",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/benchmarks.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(benchmarks_exe);
-
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    const benchmarks_cmd = b.addRunArtifact(benchmarks_exe);
-
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    benchmarks_cmd.step.dependOn(b.getInstallStep());
-
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        benchmarks_cmd.addArgs(args);
-    }
-
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const benchmarks_step = b.step("benchmarks", "Run benchmarks");
-    benchmarks_step.dependOn(&benchmarks_cmd.step);
+    addExecutableTarget(b, target, optimize, "benchmarks", "Run benchmarks", "src/benchmarks.zig");
+    addExecutableTarget(b, target, optimize, "tools", "Unix tools", "src/tools.zig");
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
@@ -67,4 +33,48 @@ pub fn build(b: *std.Build) void {
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+}
+
+fn addExecutableTarget(
+    b: *std.Build,
+    target: std.zig.CrossTarget,
+    optimize: std.builtin.Mode,
+    comptime name: []const u8,
+    comptime description: []const u8,
+    comptime src: []const u8,
+) void {
+    const _exe = b.addExecutable(.{
+        .name = name,
+        .root_source_file = .{ .path = src },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // This declares intent for the executable to be installed into the
+    // standard location when the user invokes the "install" step (the default
+    // step when running `zig build`).
+    b.installArtifact(_exe);
+
+    // This *creates* a Run step in the build graph, to be executed when another
+    // step is evaluated that depends on it. The next line below will establish
+    // such a dependency.
+    const _cmd = b.addRunArtifact(_exe);
+
+    // By making the run step depend on the install step, it will be run from the
+    // installation directory rather than directly from within the cache directory.
+    // This is not necessary, however, if the application depends on other installed
+    // files, this ensures they will be present and in the expected location.
+    _cmd.step.dependOn(b.getInstallStep());
+
+    // This allows the user to pass arguments to the application in the build
+    // command itself, like this: `zig build run -- arg1 arg2 etc`
+    if (b.args) |args| {
+        _cmd.addArgs(args);
+    }
+
+    // This creates a build step. It will be visible in the `zig build --help` menu,
+    // and can be selected like this: `zig build run`
+    // This will evaluate the `run` step rather than the default, which is "install".
+    const _step = b.step(name, description);
+    _step.dependOn(&_cmd.step);
 }

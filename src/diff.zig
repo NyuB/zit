@@ -49,7 +49,7 @@ const KArray = struct {
     }
 };
 
-fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
+pub fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
     const BackTracker = struct {
         arr: std.ArrayList(DiffItem(T)),
         const Self = @This();
