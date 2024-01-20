@@ -51,28 +51,37 @@ const KArray = struct {
 
 pub fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
     const BackTracker = struct {
-        arr: std.ArrayList(DiffItem(T)),
+        reverseDiff: std.ArrayList(DiffItem(T)),
+        target: []const T,
         const Self = @This();
-        fn init(allocator: std.mem.Allocator, dMax: usize) !Self {
+        fn init(allocator: std.mem.Allocator, dMax: usize, target: []const T) !Self {
             var arr = try std.ArrayList(DiffItem(T)).initCapacity(allocator, dMax);
-            return .{ .arr = arr };
+            return .{ .reverseDiff = arr, .target = target };
         }
 
-        fn addBack(self: *Self, item: DiffItem(T)) void {
-            self.arr.appendAssumeCapacity(item);
+        fn deinit(self: *Self) void {
+            self.reverseDiff.deinit();
+        }
+
+        fn deletion(self: *Self, position: usize) void {
+            self.reverseDiff.appendAssumeCapacity(DiffItem(T){ .Del = .{ .position = position } });
+        }
+
+        fn insertion(self: *Self, position: usize, targetIndex: usize) void {
+            self.reverseDiff.appendAssumeCapacity(DiffItem(T){ .Add = .{ .position = position, .symbols = self.target[targetIndex .. targetIndex + 1] } });
         }
 
         fn toOwnedSlice(self: *Self) ![]const DiffItem(T) {
-            if (self.arr.items.len >= 2) {
-                const half = self.arr.items.len / 2;
+            if (self.reverseDiff.items.len >= 2) {
+                const half = self.reverseDiff.items.len / 2;
                 for (0..half) |i| {
-                    const mirror = self.arr.items.len - 1 - i;
-                    const save = self.arr.items[i];
-                    self.arr.items[i] = self.arr.items[mirror];
-                    self.arr.items[mirror] = save;
+                    const mirror = self.reverseDiff.items.len - 1 - i;
+                    const save = self.reverseDiff.items[i];
+                    self.reverseDiff.items[i] = self.reverseDiff.items[mirror];
+                    self.reverseDiff.items[mirror] = save;
                 }
             }
-            return try self.arr.toOwnedSlice();
+            return try self.reverseDiff.toOwnedSlice();
         }
     };
 
@@ -116,8 +125,9 @@ pub fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) ty
 
                     if (x >= n and y >= m) {
                         try history.append(v);
-                        var backTracker = try BackTracker.init(allocator, dMax);
-                        backTrack(&backTracker, history.items, d, x, y, k, target);
+                        var backTracker = try BackTracker.init(allocator, dMax, target);
+                        errdefer backTracker.deinit();
+                        backTrack(&backTracker, history.items, d, x, y, k);
                         return try backTracker.toOwnedSlice();
                     }
                 }
@@ -126,7 +136,7 @@ pub fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) ty
             unreachable;
         }
 
-        fn backTrack(backTracker: *BackTracker, history: []const KArray, d: usize, xEnd: usize, yEnd: usize, kEnd: i64, target: []const T) void {
+        fn backTrack(backTracker: *BackTracker, history: []const KArray, d: usize, xEnd: usize, yEnd: usize, kEnd: i64) void {
             var k = kEnd;
             var x = xEnd;
             var y = yEnd;
@@ -139,12 +149,12 @@ pub fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) ty
                     k = k + 1;
                     x = vH.get(k);
                     y = y_of_x_and_k(x, k);
-                    backTracker.addBack(DiffItem(T){ .Add = .{ .position = x, .symbols = target[y .. y + 1] } });
+                    backTracker.insertion(x, y);
                 } else {
                     k = k - 1;
                     x = vH.get(k);
                     y = y_of_x_and_k(x, k);
-                    backTracker.addBack(DiffItem(T){ .Del = .{ .position = x + 1 } });
+                    backTracker.deletion(x + 1);
                 }
             }
         }
