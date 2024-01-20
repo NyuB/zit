@@ -8,10 +8,10 @@ const DiffTag = enum(u2) {
 fn DiffItem(comptime T: type) type {
     return union(DiffTag) {
         Add: struct {
-            index: usize,
+            position: usize,
             symbols: []const T,
         },
-        Del: struct { index: usize },
+        Del: struct { position: usize },
     };
 }
 
@@ -79,6 +79,8 @@ fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
     return struct {
         pub fn diff(allocator: std.mem.Allocator, original: []const T, target: []const T) !Diff(T) {
             const n = original.len;
+            if (n == 0) return try addTarget(allocator, target);
+
             const m = target.len;
             const dMax = n + m;
             var history = std.ArrayList(KArray).init(allocator);
@@ -135,14 +137,20 @@ fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
                     k = k + 1;
                     x = vH.get(k);
                     y = y_of_x_and_k(x, k);
-                    backTracker.addBack(DiffItem(T){ .Add = .{ .index = x - 1, .symbols = target[y .. y + 1] } });
+                    backTracker.addBack(DiffItem(T){ .Add = .{ .position = x, .symbols = target[y .. y + 1] } });
                 } else {
                     k = k - 1;
                     x = vH.get(k);
                     y = y_of_x_and_k(x, k);
-                    backTracker.addBack(DiffItem(T){ .Del = .{ .index = x } });
+                    backTracker.addBack(DiffItem(T){ .Del = .{ .position = x + 1 } });
                 }
             }
+        }
+
+        fn addTarget(allocator: std.mem.Allocator, target: []const T) !Diff(T) {
+            var res = try allocator.alloc(DiffItem(T), 1);
+            res[0] = DiffItem(T){ .Add = .{ .position = 0, .symbols = target } };
+            return res;
         }
 
         fn chooseDecreaseDiagonal(k: i64, kMin: i64, kMax: i64, v: KArray) bool {
@@ -165,16 +173,16 @@ const ExpectTest = @import("zunit.zig").ExpectTest;
 fn bruteDiff(allocator: std.mem.Allocator, comptime T: type, original: []const T, target: []const T) !Diff(T) {
     var res = try allocator.alloc(DiffItem(T), original.len + 1);
     for (original, 0..) |_, i| {
-        res[i] = DiffItem(T){ .Del = .{ .index = i } };
+        res[i] = DiffItem(T){ .Del = .{ .position = i + 1 } };
     }
-    res[original.len] = DiffItem(T){ .Add = .{ .index = 0, .symbols = target } };
+    res[original.len] = DiffItem(T){ .Add = .{ .position = 0, .symbols = target } };
     return res;
 }
 
 fn printDiff(expectTest: *ExpectTest, diff: Diff(String), original: Lines) !void {
     for (diff) |d| {
         switch (d) {
-            .Del => |i| try expectTest.printfmt("- {s}", .{original[i.index]}),
+            .Del => |i| try expectTest.printfmt("- {s}", .{original[i.position - 1]}),
             .Add => |a| {
                 for (a.symbols) |s| {
                     try expectTest.printfmt("+ {s}", .{s});
@@ -216,11 +224,11 @@ test "Sample diff from Myers paper" {
     const original = "abcabba";
     const expected = "cbabac";
     const diff = [_]DiffItem(u8){
-        DiffItem(u8){ .Del = .{ .index = 0 } },
-        DiffItem(u8){ .Del = .{ .index = 1 } },
-        DiffItem(u8){ .Add = .{ .index = 2, .symbols = &[_]u8{'b'} } },
-        DiffItem(u8){ .Del = .{ .index = 5 } },
-        DiffItem(u8){ .Add = .{ .index = 6, .symbols = &[_]u8{'c'} } },
+        DiffItem(u8){ .Del = .{ .position = 1 } },
+        DiffItem(u8){ .Del = .{ .position = 2 } },
+        DiffItem(u8){ .Add = .{ .position = 3, .symbols = &[_]u8{'b'} } },
+        DiffItem(u8){ .Del = .{ .position = 6 } },
+        DiffItem(u8){ .Add = .{ .position = 7, .symbols = &[_]u8{'c'} } },
     };
     try applyDiff(u8, &diff, original, writer);
     try std.testing.expectEqualStrings(expected, result.items);
@@ -234,9 +242,9 @@ test "Multiple inserts at once" {
     const original = "xxAAA";
     const expected = "AAA";
     const diff = [_]DiffItem(u8){
-        DiffItem(u8){ .Del = .{ .index = 0 } },
-        DiffItem(u8){ .Del = .{ .index = 1 } },
-        DiffItem(u8){ .Add = .{ .index = 1, .symbols = expected } },
+        DiffItem(u8){ .Del = .{ .position = 1 } },
+        DiffItem(u8){ .Del = .{ .position = 2 } },
+        DiffItem(u8){ .Add = .{ .position = 2, .symbols = expected } },
     };
     try applyDiff(u8, &diff, original, writer);
     try std.testing.expectEqualStrings(expected, result.items);
@@ -273,11 +281,11 @@ test "Paper sample" {
     const diff = try Myers(u8, charEq).diff(std.testing.allocator, original, target);
     defer std.testing.allocator.free(diff);
     try std.testing.expectEqual(@as(usize, 5), diff.len);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 0 } }, diff[0]);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 1 } }, diff[1]);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .index = 2, .symbols = "b" } }, diff[2]);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .index = 5 } }, diff[3]);
-    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .index = 6, .symbols = "c" } }, diff[4]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .position = 1 } }, diff[0]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .position = 2 } }, diff[1]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .position = 3, .symbols = "b" } }, diff[2]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Del = .{ .position = 6 } }, diff[3]);
+    try std.testing.expectEqualDeep(DiffItem(u8){ .Add = .{ .position = 7, .symbols = "c" } }, diff[4]);
 }
 
 test "No difference" {
@@ -285,6 +293,19 @@ test "No difference" {
     const diff = try Myers(u8, charEq).diff(std.testing.allocator, original, original);
     defer std.testing.allocator.free(diff);
     try std.testing.expectEqual(@as(usize, 0), diff.len);
+}
+
+test "Empty original" {
+    const diff = try Myers(u8, charEq).diff(std.testing.allocator, "", "target");
+    defer std.testing.allocator.free(diff);
+    try std.testing.expectEqual(@as(usize, 1), diff.len);
+    try std.testing.expectEqual(@as(usize, 0), diff[0].Add.position);
+    try std.testing.expectEqualStrings("target", diff[0].Add.symbols);
+    var result = std.ArrayList(u8).init(std.testing.allocator);
+    var writer = result.writer();
+    defer result.deinit();
+    try applyDiff(u8, diff, "", writer);
+    try std.testing.expectEqualStrings("target", result.items);
 }
 
 inline fn charEq(a: u8, b: u8) bool {
@@ -296,13 +317,13 @@ fn applyDiff(comptime T: type, diff: Diff(T), original: []const T, writer: anyty
     for (diff) |d| {
         switch (d) {
             .Add => |add| {
-                _ = try writer.write(original[currentIndex .. add.index + 1]);
+                _ = try writer.write(original[currentIndex..add.position]);
                 _ = try writer.write(add.symbols);
-                currentIndex = add.index + 1;
+                currentIndex = add.position;
             },
             .Del => |di| {
-                _ = try writer.write(original[currentIndex..di.index]);
-                currentIndex = di.index + 1;
+                _ = try writer.write(original[currentIndex .. di.position - 1]);
+                currentIndex = di.position;
             },
         }
     }
