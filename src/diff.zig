@@ -194,17 +194,48 @@ test "Brute diff" {
     };
     const diff = try bruteDiff(std.testing.allocator, String, &original, &target);
     defer std.testing.allocator.free(diff);
-    var expectTest = ExpectTest.init(std.testing.allocator);
-    defer expectTest.deinit();
+    var et = ExpectTest.init(std.testing.allocator);
+    defer et.deinit();
 
-    try printDiff(&expectTest, diff, &original);
+    try printDiff(&et, diff, &original);
 
-    try expectTest.expect(
+    try et.expect(
         \\- Je vis cette faucheuse,
         \\- Elle était dans son champ,
         \\+ Elle allait à grands pas moissonnant et fauchant,
         \\+ Noir squelette laissant passer le crépuscule,
     );
+    try et.end();
+}
+
+test "Myers diff on code sample" {
+    const original = [_]String{
+        "def f(n):",
+        "    k = n * (n - 1)",
+        "    return k / 2",
+    };
+    const corrected = [_]String{
+        "def f(n):",
+        "    k = n * (n + 1)",
+        "    return k / 2",
+    };
+    var diff = try Myers(String, strEq).diff(std.testing.allocator, &original, &corrected);
+    defer std.testing.allocator.free(diff);
+    var et = ExpectTest.init(std.testing.allocator);
+    defer et.deinit();
+    try printDiff(&et, diff, &original);
+    try et.expect(
+        \\-     k = n * (n - 1)
+        \\+     k = n * (n + 1)
+    );
+    var writer = et.stringWriter();
+    try applyDiff(String, diff, &original, writer);
+    try et.expect(
+        \\def f(n):
+        \\    k = n * (n + 1)
+        \\    return k / 2
+    );
+    try et.end();
 }
 
 test "Sample diff from Myers paper" {
@@ -362,4 +393,8 @@ fn applyDiff(comptime T: type, diff: Diff(T), original: []const T, writer: anyty
 
 inline fn charEq(a: u8, b: u8) bool {
     return a == b;
+}
+
+inline fn strEq(a: String, b: String) bool {
+    return std.mem.eql(u8, a, b);
 }
