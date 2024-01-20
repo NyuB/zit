@@ -254,11 +254,11 @@ test "Multiple inserts at once" {
     var writer = result.writer();
 
     const original = "xxAAA";
-    const expected = "AAA";
+    const expected = "AAAAAA";
     const diff = [_]DiffItem(u8){
         DiffItem(u8){ .Del = .{ .position = 1 } },
         DiffItem(u8){ .Del = .{ .position = 2 } },
-        DiffItem(u8){ .Add = .{ .position = 2, .symbols = expected } },
+        DiffItem(u8){ .Add = .{ .position = 2, .symbols = "AAA" } },
     };
     try applyDiff(u8, &diff, original, writer);
     try std.testing.expectEqualStrings(expected, result.items);
@@ -361,4 +361,5 @@ fn applyDiff(comptime T: type, diff: Diff(T), original: []const T, writer: anyty
             },
         }
     }
+    _ = try writer.write(original[currentIndex..original.len]);
 }
