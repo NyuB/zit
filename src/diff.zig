@@ -183,29 +183,6 @@ const String = []const u8;
 const Lines = []const String;
 const ExpectTest = @import("zunit.zig").ExpectTest;
 
-/// Callers owns returned memory
-fn bruteDiff(allocator: std.mem.Allocator, comptime T: type, original: []const T, target: []const T) !Diff(T) {
-    var res = try allocator.alloc(DiffItem(T), original.len + 1);
-    for (original, 0..) |_, i| {
-        res[i] = DiffItem(T){ .Del = .{ .position = i + 1 } };
-    }
-    res[original.len] = DiffItem(T){ .Add = .{ .position = 0, .symbols = target } };
-    return res;
-}
-
-fn printDiff(expectTest: *ExpectTest, diff: Diff(String), original: Lines) !void {
-    for (diff) |d| {
-        switch (d) {
-            .Del => |i| try expectTest.printfmt("- {s}", .{original[i.position - 1]}),
-            .Add => |a| {
-                for (a.symbols) |s| {
-                    try expectTest.printfmt("+ {s}", .{s});
-                }
-            },
-        }
-    }
-}
-
 test "Brute diff" {
     const original = [_]String{
         "Je vis cette faucheuse,",
@@ -342,8 +319,27 @@ test "Empty target and original" {
     try std.testing.expectEqual(@as(usize, 0), diff.len);
 }
 
-inline fn charEq(a: u8, b: u8) bool {
-    return a == b;
+/// Callers owns returned memory
+fn bruteDiff(allocator: std.mem.Allocator, comptime T: type, original: []const T, target: []const T) !Diff(T) {
+    var res = try allocator.alloc(DiffItem(T), original.len + 1);
+    for (original, 0..) |_, i| {
+        res[i] = DiffItem(T){ .Del = .{ .position = i + 1 } };
+    }
+    res[original.len] = DiffItem(T){ .Add = .{ .position = 0, .symbols = target } };
+    return res;
+}
+
+fn printDiff(expectTest: *ExpectTest, diff: Diff(String), original: Lines) !void {
+    for (diff) |d| {
+        switch (d) {
+            .Del => |i| try expectTest.printfmt("- {s}", .{original[i.position - 1]}),
+            .Add => |a| {
+                for (a.symbols) |s| {
+                    try expectTest.printfmt("+ {s}", .{s});
+                }
+            },
+        }
+    }
 }
 
 fn applyDiff(comptime T: type, diff: Diff(T), original: []const T, writer: anytype) !void {
@@ -362,4 +358,8 @@ fn applyDiff(comptime T: type, diff: Diff(T), original: []const T, writer: anyty
         }
     }
     _ = try writer.write(original[currentIndex..original.len]);
+}
+
+inline fn charEq(a: u8, b: u8) bool {
+    return a == b;
 }
