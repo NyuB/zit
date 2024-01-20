@@ -79,10 +79,12 @@ fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
     return struct {
         pub fn diff(allocator: std.mem.Allocator, original: []const T, target: []const T) !Diff(T) {
             const n = original.len;
-            if (n == 0) return try addTarget(allocator, target);
-
             const m = target.len;
             const dMax = n + m;
+            if (dMax == 0) return try noDiff(allocator);
+            if (n == 0) return try addTarget(allocator, target);
+            if (m == 0) return try delOriginal(allocator, original.len);
+
             var history = std.ArrayList(KArray).init(allocator);
             defer {
                 for (history.items) |*i| {
@@ -151,6 +153,18 @@ fn Myers(comptime T: type, comptime eq: fn (T, T) callconv(.Inline) bool) type {
             var res = try allocator.alloc(DiffItem(T), 1);
             res[0] = DiffItem(T){ .Add = .{ .position = 0, .symbols = target } };
             return res;
+        }
+
+        fn delOriginal(allocator: std.mem.Allocator, len: usize) !Diff(T) {
+            var res = try allocator.alloc(DiffItem(T), len);
+            for (0..len) |i| {
+                res[i] = DiffItem(T){ .Del = .{ .position = i + 1 } };
+            }
+            return res;
+        }
+
+        inline fn noDiff(allocator: std.mem.Allocator) !Diff(T) {
+            return try allocator.alloc(DiffItem(T), 0);
         }
 
         fn chooseDecreaseDiagonal(k: i64, kMin: i64, kMax: i64, v: KArray) bool {
@@ -306,6 +320,26 @@ test "Empty original" {
     defer result.deinit();
     try applyDiff(u8, diff, "", writer);
     try std.testing.expectEqualStrings("target", result.items);
+}
+
+test "Empty target" {
+    const diff = try Myers(u8, charEq).diff(std.testing.allocator, "original", "");
+    defer std.testing.allocator.free(diff);
+    try std.testing.expectEqual(@as(usize, 8), diff.len);
+    for (0.."original".len) |i| {
+        try std.testing.expectEqual(@as(usize, i + 1), diff[i].Del.position);
+    }
+    var result = std.ArrayList(u8).init(std.testing.allocator);
+    var writer = result.writer();
+    defer result.deinit();
+    try applyDiff(u8, diff, "original", writer);
+    try std.testing.expectEqualStrings("", result.items);
+}
+
+test "Empty target and original" {
+    const diff = try Myers(u8, charEq).diff(std.testing.allocator, "", "");
+    defer std.testing.allocator.free(diff);
+    try std.testing.expectEqual(@as(usize, 0), diff.len);
 }
 
 inline fn charEq(a: u8, b: u8) bool {
