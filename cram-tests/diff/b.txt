@@ -1,0 +1,7 @@
+Line A
+SWAP 2
+Line B
+Line C
+SWAP 1
+Line D
+Line E
