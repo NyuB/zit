@@ -1,6 +1,10 @@
 all: fmt build test
+
+dev: fmt test
+
 build:
-	zig build
+	zig build -Doptimize=ReleaseSafe
+
 fmt:
 	zig fmt src
 	zig fmt build.zig
