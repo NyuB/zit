@@ -1,8 +1,15 @@
 const std = @import("std");
 const String = []const u8;
 
+/// Used as nullable return type to signal that the caller should comptime fail
+/// Allow to implement tests for comptime checks behaviour
+/// May be a more complex structure in future implementations ...
+const ComptimeFailWithMessage = String;
+
 pub fn argParse(args: []const String, comptime Spec: type) ParseError!Spec {
-    comptime validateSpec(Spec);
+    comptime if (validateSpec(Spec)) |failWithMessage| {
+        @compileError(failWithMessage);
+    };
     const info = @typeInfo(Spec);
     var result: Spec = undefined;
     inline for (info.Struct.fields) |f| {
@@ -15,35 +22,37 @@ pub fn argParse(args: []const String, comptime Spec: type) ParseError!Spec {
     return result;
 }
 
-fn validateSpec(comptime Spec: type) void {
+fn validateSpec(comptime Spec: type) ?ComptimeFailWithMessage {
     const info = @typeInfo(Spec);
     inline for (info.Struct.fields) |f| {
         if (@hasDecl(f.type, "parse")) {
-            validateParseFn(f);
+            if (validateParseFn(f)) |failWithMessage| return failWithMessage;
         } else if (@hasDecl(f.type, "set")) {
-            validateSetFn(f);
+            if (validateSetFn(f)) |failWithMessage| return failWithMessage;
         } else {
-            const msg = std.fmt.comptimePrint("Option {s} does not implement set() or parse()", .{f.name});
-            @compileError(msg);
+            const failWithMessage = std.fmt.comptimePrint("Option '{s}':{any} does not implement set() or parse()", .{ f.name, f.type });
+            return failWithMessage;
         }
     }
+    return null;
 }
 
-fn validateParseFn(comptime f: std.builtin.Type.StructField) void {
+fn validateParseFn(comptime f: std.builtin.Type.StructField) ?ComptimeFailWithMessage {
     const fnSpec = @typeInfo(@TypeOf(f.type.parse)).Fn;
     const fnParams = fnSpec.params;
     const expectedReturnType = ParseError!f.type;
     if (fnParams.len != 1 or fnParams[0].type.? != String or fnSpec.return_type.? != expectedReturnType) {
-        var fnParamTypes: [fnParams.len]type = undefined;
+        comptime var fnParamTypes: [fnParams.len]type = undefined;
         inline for (fnParams, 0..) |p, i| {
             fnParamTypes[i] = p.type.?;
         }
-        const msg = std.fmt.comptimePrint("Option {s} does not implement parse({{ {any} }}){any}, found parse({any}){any}", .{ f.name, String, expectedReturnType, fnParamTypes, fnSpec.return_type });
-        @compileError(msg);
+        const msg = std.fmt.comptimePrint("Option '{s}':{any} does not implement parse({{ {any} }}){any}, found parse({any}){any}", .{ f.name, f.type, String, expectedReturnType, fnParamTypes, fnSpec.return_type });
+        return msg;
     }
+    return null;
 }
 
-fn validateSetFn(comptime f: std.builtin.Type.StructField) void {
+fn validateSetFn(comptime f: std.builtin.Type.StructField) ?ComptimeFailWithMessage {
     const fnSpec = @typeInfo(@TypeOf(f.type.set)).Fn;
     const fnParams = fnSpec.params;
     const expectedReturnType = ParseError!f.type;
@@ -52,9 +61,10 @@ fn validateSetFn(comptime f: std.builtin.Type.StructField) void {
         inline for (fnParams, 0..) |p, i| {
             fnParamTypes[i] = p.type.?;
         }
-        const msg = std.fmt.comptimePrint("Option {s} does not implement set(){any}, found set({any}){any}", .{ f.name, expectedReturnType, fnParamTypes, fnSpec.return_type });
-        @compileError(msg);
+        const msg = std.fmt.comptimePrint("Option '{s}':{any} does not implement set(){any}, found set({any}){any}", .{ f.name, f.type, expectedReturnType, fnParamTypes, fnSpec.return_type });
+        return msg;
     }
+    return null;
 }
 
 fn searchParsable(comptime Spec: type, comptime f: std.builtin.Type.StructField, args: []const String, spec: *Spec) ParseError!void {
@@ -111,7 +121,7 @@ inline fn strEq(a: String, b: String) bool {
 
 // Tests
 
-test "argParse two options" {
+test "argParse: two options" {
     const TestArgs = struct {
         verbose: BoolArg,
         name: StringArg,
@@ -124,7 +134,7 @@ test "argParse two options" {
     try std.testing.expectEqualDeep(TestArgs{ .verbose = .{ .value = true }, .name = .{ .value = "test" } }, parsed);
 }
 
-test "argParse flag" {
+test "argParse: flag" {
     const VerboseFlag = struct {
         value: bool,
         fn set() ParseError!@This() {
@@ -141,7 +151,7 @@ test "argParse flag" {
     try std.testing.expectEqualDeep(TestArgs{ .verbose = .{ .value = true } }, parsed);
 }
 
-test "argParse missing option" {
+test "argParse: missing option" {
     const TestArgs = struct {
         a: StringArg,
         b: StringArg,
@@ -160,7 +170,7 @@ test "argParse missing option" {
     try std.testing.expectError(ParseError.MissingArgument, parsed);
 }
 
-test "argParse invalid option value" {
+test "argParse: invalid option value" {
     const TestArgs = struct {
         b: BoolArg,
     };
@@ -171,3 +181,97 @@ test "argParse invalid option value" {
     var parsed = argParse(args, TestArgs);
     try std.testing.expectError(ParseError.InvalidValue, parsed);
 }
+
+test "validateSpec: missing set() or parse()" {
+    const InvalidSpec = struct {
+        invalidField: InvalidSpecOption,
+    };
+    try expectFailWithMessage("Option 'invalidField':argparse.InvalidSpecOption does not implement set() or parse()", InvalidSpec);
+}
+
+test "validateSpec: parse() too many parameters" {
+    const InvalidSpec = struct {
+        invalidField: TooManyParseParameters,
+    };
+    try expectFailWithMessage("Option 'invalidField':argparse.TooManyParseParameters does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.TooManyParseParameters, found parse({ []const u8, []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.TooManyParseParameters", InvalidSpec);
+}
+
+test "validateSpec: parse() missing parameter" {
+    const InvalidSpec = struct {
+        invalidField: MissingParseParameter,
+    };
+    try expectFailWithMessage("Option 'invalidField':argparse.MissingParseParameter does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.MissingParseParameter, found parse({  })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.MissingParseParameter", InvalidSpec);
+}
+
+test "validateSpec: parse() wrong parameter type" {
+    const InvalidSpec = struct {
+        invalidField: WrongParseParameterType,
+    };
+    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseParameterType does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.WrongParseParameterType, found parse({ u32 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.WrongParseParameterType", InvalidSpec);
+}
+
+test "validateSpec: parse() wrong return type" {
+    const InvalidSpec = struct {
+        invalidField: WrongParseReturnType,
+    };
+    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseReturnType does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.WrongParseReturnType, found parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!u32", InvalidSpec);
+}
+
+test "validateSpec: parse() wrong error type" {
+    const InvalidSpec = struct {
+        invalidField: WrongParseErrorType,
+    };
+    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseErrorType does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.WrongParseErrorType, found parse({ []const u8 })argparse.WrongParseErrorType", InvalidSpec);
+}
+
+fn expectFailWithMessage(msg: ComptimeFailWithMessage, comptime Spec: type) !void {
+    const failMessage = validateSpec(Spec);
+    try std.testing.expect(failMessage != null);
+    try std.testing.expectEqualStrings(msg, failMessage.?);
+}
+
+// Declare failing structs outside of their respective tests to simplify error messages
+
+const InvalidSpecOption = struct {
+    value: void,
+};
+
+const TooManyParseParameters = struct {
+    value: void,
+    fn parse(s: String, oups: String) ParseError!@This() {
+        _ = oups;
+        _ = s;
+        return .{ .value = {} };
+    }
+};
+
+const MissingParseParameter = struct {
+    value: void,
+    fn parse() ParseError!@This() {
+        return .{ .value = {} };
+    }
+};
+
+const WrongParseParameterType = struct {
+    value: void,
+    fn parse(oups: u32) ParseError!@This() {
+        _ = oups;
+        return .{ .value = {} };
+    }
+};
+
+const WrongParseReturnType = struct {
+    value: void,
+    fn parse(s: String) ParseError!u32 {
+        _ = s;
+        return 0;
+    }
+};
+
+const WrongParseErrorType = struct {
+    value: void,
+    fn parse(s: String) @This() {
+        _ = s;
+        return 0;
+    }
+};
