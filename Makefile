@@ -2,7 +2,7 @@ all: fmt build test
 
 dev: fmt test
 
-build:
+build: fmt
 	zig build --prefix bin/win -Doptimize=ReleaseSafe -Dtarget=x86_64-windows
 	zig build --prefix bin/lin -Doptimize=ReleaseSafe -Dtarget=x86_64-linux
 
