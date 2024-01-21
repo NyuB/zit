@@ -4,7 +4,7 @@ const String = []const u8;
 /// Used as nullable return type to signal that the caller should comptime fail
 /// Allow to implement tests for comptime checks behaviour
 /// May be a more complex structure in future implementations ...
-const ComptimeFailWithMessage = String;
+const ComptimeFailWithMessage = ?String;
 
 pub fn argParse(args: []const String, comptime Spec: type) ParseError!Spec {
     comptime if (validateSpec(Spec)) |failWithMessage| {
@@ -22,7 +22,7 @@ pub fn argParse(args: []const String, comptime Spec: type) ParseError!Spec {
     return result;
 }
 
-fn validateSpec(comptime Spec: type) ?ComptimeFailWithMessage {
+fn validateSpec(comptime Spec: type) ComptimeFailWithMessage {
     const info = @typeInfo(Spec);
     inline for (info.Struct.fields) |f| {
         if (@hasDecl(f.type, "parse")) {
@@ -37,7 +37,7 @@ fn validateSpec(comptime Spec: type) ?ComptimeFailWithMessage {
     return null;
 }
 
-fn validateParseFn(comptime f: std.builtin.Type.StructField) ?ComptimeFailWithMessage {
+fn validateParseFn(comptime f: std.builtin.Type.StructField) ComptimeFailWithMessage {
     const fnSpec = @typeInfo(@TypeOf(f.type.parse)).Fn;
     const fnParams = fnSpec.params;
     const expectedReturnType = ParseError!f.type;
@@ -52,7 +52,7 @@ fn validateParseFn(comptime f: std.builtin.Type.StructField) ?ComptimeFailWithMe
     return null;
 }
 
-fn validateSetFn(comptime f: std.builtin.Type.StructField) ?ComptimeFailWithMessage {
+fn validateSetFn(comptime f: std.builtin.Type.StructField) ComptimeFailWithMessage {
     const fnSpec = @typeInfo(@TypeOf(f.type.set)).Fn;
     const fnParams = fnSpec.params;
     const expectedReturnType = ParseError!f.type;
@@ -95,6 +95,7 @@ fn searchSettable(comptime Spec: type, comptime f: std.builtin.Type.StructField,
 
 pub const ParseError = error{
     DuplicatedArgument,
+    IntegerValueOutOfRange,
     InvalidValue,
     MissingArgument,
 };
@@ -115,23 +116,40 @@ pub const StringArg = struct {
     }
 };
 
+pub fn IntArg(comptime I: type) type {
+    return struct {
+        value: I,
+
+        fn parse(s: String) ParseError!@This() {
+            if (std.fmt.parseInt(I, s, 10)) |res| {
+                return .{ .value = res };
+            } else |err| switch (err) {
+                error.Overflow => {
+                    return ParseError.IntegerValueOutOfRange;
+                },
+                error.InvalidCharacter => {
+                    return ParseError.InvalidValue;
+                },
+            }
+        }
+    };
+}
+
 inline fn strEq(a: String, b: String) bool {
     return std.mem.eql(u8, a, b);
 }
 
 // Tests
 
-test "argParse: two options" {
+test "argParse: nominal" {
     const TestArgs = struct {
         verbose: BoolArg,
         name: StringArg,
+        optimize: IntArg(u2),
     };
-    const args = &[_]String{
-        "--verbose=true",
-        "--name=test",
-    };
+    const args = &[_]String{ "--verbose=true", "--name=test", "--optimize=3" };
     const parsed = try argParse(args, TestArgs);
-    try std.testing.expectEqualDeep(TestArgs{ .verbose = .{ .value = true }, .name = .{ .value = "test" } }, parsed);
+    try std.testing.expectEqualDeep(TestArgs{ .verbose = .{ .value = true }, .name = .{ .value = "test" }, .optimize = .{ .value = 3 } }, parsed);
 }
 
 test "argParse: flag" {
@@ -182,6 +200,18 @@ test "argParse: invalid option value" {
     try std.testing.expectError(ParseError.InvalidValue, parsed);
 }
 
+test "argParse: out of range integer value" {
+    const TestArgs = struct {
+        i: IntArg(u2),
+    };
+
+    var args = &[_]String{
+        "--i=4",
+    };
+    var parsed = argParse(args, TestArgs);
+    try std.testing.expectError(ParseError.IntegerValueOutOfRange, parsed);
+}
+
 test "validateSpec: missing set() or parse()" {
     const InvalidSpec = struct {
         invalidField: InvalidSpecOption,
@@ -193,38 +223,38 @@ test "validateSpec: parse() too many parameters" {
     const InvalidSpec = struct {
         invalidField: TooManyParseParameters,
     };
-    try expectFailWithMessage("Option 'invalidField':argparse.TooManyParseParameters does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.TooManyParseParameters, found parse({ []const u8, []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.TooManyParseParameters", InvalidSpec);
+    try expectFailWithMessage("Option 'invalidField':argparse.TooManyParseParameters does not implement parse({ []const u8 })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!argparse.TooManyParseParameters, found parse({ []const u8, []const u8 })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!argparse.TooManyParseParameters", InvalidSpec);
 }
 
 test "validateSpec: parse() missing parameter" {
     const InvalidSpec = struct {
         invalidField: MissingParseParameter,
     };
-    try expectFailWithMessage("Option 'invalidField':argparse.MissingParseParameter does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.MissingParseParameter, found parse({  })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.MissingParseParameter", InvalidSpec);
+    try expectFailWithMessage("Option 'invalidField':argparse.MissingParseParameter does not implement parse({ []const u8 })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!argparse.MissingParseParameter, found parse({  })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!argparse.MissingParseParameter", InvalidSpec);
 }
 
 test "validateSpec: parse() wrong parameter type" {
     const InvalidSpec = struct {
         invalidField: WrongParseParameterType,
     };
-    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseParameterType does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.WrongParseParameterType, found parse({ u32 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.WrongParseParameterType", InvalidSpec);
+    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseParameterType does not implement parse({ []const u8 })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!argparse.WrongParseParameterType, found parse({ u32 })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!argparse.WrongParseParameterType", InvalidSpec);
 }
 
 test "validateSpec: parse() wrong return type" {
     const InvalidSpec = struct {
         invalidField: WrongParseReturnType,
     };
-    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseReturnType does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.WrongParseReturnType, found parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!u32", InvalidSpec);
+    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseReturnType does not implement parse({ []const u8 })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!argparse.WrongParseReturnType, found parse({ []const u8 })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!u32", InvalidSpec);
 }
 
 test "validateSpec: parse() wrong error type" {
     const InvalidSpec = struct {
         invalidField: WrongParseErrorType,
     };
-    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseErrorType does not implement parse({ []const u8 })error{DuplicatedArgument,InvalidValue,MissingArgument}!argparse.WrongParseErrorType, found parse({ []const u8 })argparse.WrongParseErrorType", InvalidSpec);
+    try expectFailWithMessage("Option 'invalidField':argparse.WrongParseErrorType does not implement parse({ []const u8 })error{DuplicatedArgument,IntegerValueOutOfRange,InvalidValue,MissingArgument}!argparse.WrongParseErrorType, found parse({ []const u8 })argparse.WrongParseErrorType", InvalidSpec);
 }
 
-fn expectFailWithMessage(msg: ComptimeFailWithMessage, comptime Spec: type) !void {
+fn expectFailWithMessage(msg: String, comptime Spec: type) !void {
     const failMessage = validateSpec(Spec);
     try std.testing.expect(failMessage != null);
     try std.testing.expectEqualStrings(msg, failMessage.?);
