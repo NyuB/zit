@@ -1,4 +1,5 @@
 const std = @import("std");
+const argparse = @import("argparse.zig");
 const diff = @import("diff.zig");
 const sha1 = @import("sha1.zig");
 
@@ -11,10 +12,15 @@ pub fn main() !void {
     const stdOutFile = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdOutFile);
     const stdOut = bw.writer();
-
+    if (args.len < 2) {
+        try stdOut.print("{s}\n", .{usage});
+        try bw.flush();
+    }
     const tool = args[1];
+    const toolArgs = args[2..];
     if (std.mem.eql(u8, "diff", tool)) {
-        try tool_diff(allocator, args[2], args[3], stdOut, &bw);
+        const options = try argparse.argParse(toolArgs, DiffOptions);
+        try tool_diff(allocator, options, toolArgs[toolArgs.len - 2], toolArgs[toolArgs.len - 1], stdOut, &bw);
     } else if (std.mem.eql(u8, "hash", tool)) {
         try tool_sha1(allocator, args[2], stdOut, &bw);
     } else {
@@ -23,7 +29,7 @@ pub fn main() !void {
     try bw.flush();
 }
 
-fn tool_diff(allocator: std.mem.Allocator, fileA_path: String, fileB_path: String, stdOut: anytype, bw: anytype) !void {
+fn tool_diff(allocator: std.mem.Allocator, options: DiffOptions, fileA_path: String, fileB_path: String, stdOut: anytype, bw: anytype) !void {
     var fileA = try Lines.readFile(fileA_path, allocator);
     defer fileA.deinit();
 
@@ -32,21 +38,25 @@ fn tool_diff(allocator: std.mem.Allocator, fileA_path: String, fileB_path: Strin
 
     const d = try diff.Myers(String, strEq).diff(allocator, fileA.lines, fileB.lines);
     defer allocator.free(d);
-
+    const ansiDefaultColor = if (options.color.value) "\u{001b}[39m" else "";
+    const ansiGreen = if (options.color.value) "\u{001b}[31m" else "";
+    const ansiRed = if (options.color.value) "\u{001b}[32m" else "";
     for (d) |di| {
         switch (di) {
             .Add => |add| {
                 for (add.symbols) |l| {
-                    try stdOut.print("{d} + {s}\n", .{ add.position, l });
+                    try stdOut.print("{s}{d} + {s}{s}\n", .{ ansiGreen, add.position, l, ansiDefaultColor });
                 }
             },
             .Del => |del| {
-                try stdOut.print("{d} - {s}\n", .{ del.position, fileA.lines[del.position - 1] });
+                try stdOut.print("{s}{d} - {s}{s}\n", .{ ansiRed, del.position, fileA.lines[del.position - 1], ansiDefaultColor });
             },
         }
         try bw.flush();
     }
 }
+
+const DiffOptions = struct { color: argparse.BoolFlag };
 
 fn tool_sha1(allocator: std.mem.Allocator, file_path: String, stdOut: anytype, bw: anytype) !void {
     var h = sha1.SHA1{};
@@ -59,9 +69,10 @@ fn tool_sha1(allocator: std.mem.Allocator, file_path: String, stdOut: anytype, b
 const usage =
     \\Usage: tools {diff, hash, help,} [args ...]
     \\
-    \\    diff <file_a> <file_b>: output the edit script to update from file_a from file_b
+    \\    diff <file_a> <file_b>: output the edit script to update from <file_a> from <file_b>
+    \\        --color: output deletions in red and insertions in green
     \\
-    \\    hash <file>           : output the hexadecimal representation of the sha1 checksum of file 
+    \\    hash <file>           : output the hexadecimal representation of the sha1 checksum of <file> 
     \\
     \\    help                  : print this help message
 ;
