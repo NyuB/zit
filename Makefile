@@ -22,7 +22,7 @@ benchmarks-zlib:
 TEST_DOCKER_IMAGE=zit-test
 TEST_DOCKER_MOUNT_CMD=-v $(CURDIR)/bin/:/workspace/bin:ro -v $(CURDIR)/cram-tests:/workspace/cram-tests
 
-test-cram:
+test-cram: build
 	docker run -w /workspace $(TEST_DOCKER_MOUNT_CMD) $(TEST_DOCKER_IMAGE) make -C cram-tests PROMOTE=$(PROMOTE) test
 
 test-image-build:
